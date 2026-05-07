@@ -3,6 +3,7 @@
 **Goal:** Design your own evolutionary robotics experiment and present your findings in the final poster session  
 **How:** In 4 exercises, we will explore different concepts of evolutionary robotics experimentation.  
 
+Test push on Chelsea's branch
 ---
 
 ## Introduction
