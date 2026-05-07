@@ -5,7 +5,7 @@
 
 In Challenge 1, you will evolutionary algorithms to evolve a neural controller to let an abstract four-legged robot learn to locomote on a flat surface as fast as possible. 
 
-## Learning Goals
+## Learning Goal
 
 <a><img src="imgs/ant_locomote.gif" width="200" align="right" /></a>
 
