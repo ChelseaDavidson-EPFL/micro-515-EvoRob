@@ -5,6 +5,18 @@ Evolve a legged robot (body + controller) to walk in the +x direction across
 three training environments simultaneously.  The genotype encodes both the
 neural controller weights and the body morphology (leg lengths).
 
+Changes from default skeleton
+------------------------------
+* Controller  : CPGController  — SO2 oscillator modulated per-step by a small
+                MLP that reads proprioceptive feedback (closed-loop CPG).
+* Body params : 2 params  [upper_len, lower_len] shared across all 4 legs
+                (bilateral + front-back symmetry).  Switch to 4 params
+                (per-leg-pair) by setting N_BODY_PARAMS = 4 below.
+* EA          : Phase-1  NSGA-II   → inspect Pareto front, pick generalist
+                Phase-2  CMA-ES    → refine chosen solution (optional, see bottom)
+* Fitness     : three separate objectives [flat, ice, hill] for NSGA-II;
+                scalarised as  min(f1, f2, f3)  for CMA-ES.
+
 Training environments (3 objectives)
 -------------------------------------
 1  Flat  — standard ground, good friction  (FlatEnv-v0  / flat_world.xml)
@@ -28,15 +40,29 @@ from PIL import Image
 from gymnasium.vector import AsyncVectorEnv
 
 import evorob.world                         # registers EvalEnv-v0
-from evorob.algorithms.nsga_sol import NSGAII
+from evorob.algorithms.nsga import NSGAII
+from evorob.algorithms.ea_api import CMAESAPI
 from evorob.utils.filesys import get_last_checkpoint_dir, get_project_root
+
+# ── swap this import to go back to the default MLP ──────────────────────────
+from evorob.world.robot.controllers.cpg import CPGController
+# from evorob.world.robot.controllers.mlp import NeuralNetworkController
+# ────────────────────────────────────────────────────────────────────────────
+
 from evorob.world.base import World
-from evorob.world.robot.controllers.mlp_sol import NeuralNetworkController
 from evorob.world.robot.morphology.ant_custom_robot import AntRobot
 
 ROOT_DIR = get_project_root()
 _ASSETS  = join(ROOT_DIR, "evorob", "world", "robot", "assets")
 MAX_EPISODE_STEPS = 1000  # fixed for leaderboard — do not change
+
+# ---------------------------------------------------------------------------
+# Body-parameter choice
+#   2  →  [upper_len, lower_len]  shared by all 4 legs  (fastest convergence)
+#   4  →  [upper_front, lower_front, upper_back, lower_back]  (more expressive)
+#   8  →  original per-segment encoding
+# ---------------------------------------------------------------------------
+N_BODY_PARAMS = 2   # ← change to 4 for the second phase
 
 
 # ---------------------------------------------------------------------------
@@ -46,34 +72,46 @@ MAX_EPISODE_STEPS = 1000  # fixed for leaderboard — do not change
 class FinalWorld(World):
     """Translates a genotype into a robot phenotype and evaluates it.
 
-    The genotype is a 1-D array: [controller_params | body_params].
-    Each call to evaluate_individual generates the robot body XML, injects it
-    into every terrain template, then runs the controller in parallel episodes.
+    Genotype layout
+    ---------------
+    [ CPG params  (n_weights) | body params (N_BODY_PARAMS) ]
+
+    CPG params are scaled by 0.1 before being passed to geno2pheno.
+    Body params are mapped to leg-segment lengths via  (g+1)/4 + 0.1,
+    giving lengths in [0.1, 0.6] m.
     """
 
     def __init__(self):
-        # Choose your controller — swap for your own MLP, SO2Controller, Hebbian, or custom.
-        # Whatever you choose determines self.n_weights (controller parameter count).
-        #
-        # from evorob.world.robot.controllers.mlp import NeuralNetworkController  # your impl
-        # from evorob.world.robot.controllers.so2 import SO2Controller
-        # self.controller = SO2Controller(input_size=27, output_size=8, hidden_size=8)
-        self.controller = NeuralNetworkController(
-            input_size=27, output_size=8, hidden_size=8
+        # ------------------------------------------------------------------
+        # Controller - Choose your controller — swap for your own MLP, SO2Controller, Hebbian, or custom.
+        #              Whatever you choose determines self.n_weights (controller parameter count).
+        # ------------------------------------------------------------------
+        self.controller = CPGController(
+            input_size=27,
+            output_size=8,
+            hidden_size=8,          # small — SO2 handles the rhythm
+            base_freq=2 * np.pi,
+            max_dfreq=np.pi,
+            dt=0.05,
+            inter_con_density=0.5,
         )
 
         self.n_weights     = self.controller.n_params
-        self.n_body_params = 8          # 4 legs × (upper + lower segment length)
+        self.n_body_params = N_BODY_PARAMS
         self.n_params      = self.n_weights + self.n_body_params
 
-        # Temporary directory holds AntRobot.xml + one combined world XML per terrain
+        # ------------------------------------------------------------------
+        # Temp files - Temporary directory holds AntRobot.xml + one combined world XML per terrain
+        # ------------------------------------------------------------------
         self.temp_dir        = TemporaryDirectory()
         self.flat_world_file = join(self.temp_dir.name, "WorldFlat.xml")
         self.ice_world_file  = join(self.temp_dir.name, "WorldIce.xml")
         self.hill_world_file = join(self.temp_dir.name, "WorldHill.xml")
-        self.world_file      = self.hill_world_file  # default for visualisation
+        self.world_file      = self.hill_world_file
 
-        # Joint geometry — matches the AntRobot topology
+        # ------------------------------------------------------------------
+        # Joint geometry
+        # ------------------------------------------------------------------
         self.joint_limits = [
             [-30, 30], [30, 70],
             [-30, 30], [-70, -30],
@@ -104,52 +142,62 @@ class FinalWorld(World):
     # ------------------------------------------------------------------
 
     def geno2pheno(self, genotype: np.ndarray):
-        """Decode genotype into controller weights and body parameters.
+        """Decode genotype → controller weights + symmetric body.
 
-        Splits genotype into:
-          genotype[:n_weights]  → controller (scaled by 0.1 before loading)
-          genotype[n_weights:]  → 8 leg-segment lengths via (g+1)/4 + 0.1
+        Body encoding
+        -------------
+        N_BODY_PARAMS == 2
+            g = [upper, lower]  →  all 4 legs identical
+        N_BODY_PARAMS == 4
+            g = [upper_front, lower_front, upper_back, lower_back]
+            front-left  = front-right  (bilateral symmetry)
+            back-left   = back-right
 
-        Returns (points, connectivity_mat) for AntRobot construction.
+        Segment length mapping: (g + 1) / 4 + 0.1  →  [0.1, 0.6] m
         """
         control_params = genotype[:self.n_weights] * 0.1
-        body_params    = (genotype[self.n_weights:] + 1) / 4 + 0.1
+        body_raw       = (genotype[self.n_weights:] + 1) / 4 + 0.1
         self.controller.geno2pheno(control_params)
 
-        front_left_leg, front_left_ankle, front_right_leg, front_right_ankle, back_left_leg, back_left_ankle, back_right_leg, back_right_ankle, = body_params
+        if N_BODY_PARAMS == 2:
+            upper, lower = body_raw[0], body_raw[1]
+            # All four legs share the same upper and lower segment length
+            fl_up = fr_up = bl_up = br_up = upper
+            fl_lo = fr_lo = bl_lo = br_lo = lower
 
-        # Define the 3D coordinates of the relative tree structure
-        front_left_hip_xyz = np.array([0.2, 0.2, 0])
-        front_left_knee_xyz = np.array([np.sqrt(0.5 * front_left_leg ** 2), np.sqrt(0.5 * front_left_leg ** 2), 0]) + front_left_hip_xyz
-        front_left_toe_xyz = np.array([np.sqrt(0.5 * front_left_ankle ** 2), np.sqrt(0.5 * front_left_ankle ** 2), 0]) + front_left_knee_xyz
+        elif N_BODY_PARAMS == 4:
+            fl_up = fr_up = body_raw[0]   # upper front
+            fl_lo = fr_lo = body_raw[1]   # lower front
+            bl_up = br_up = body_raw[2]   # upper back
+            bl_lo = br_lo = body_raw[3]   # lower back
 
-        front_right_hip_xyz = np.array([-0.2, 0.2, 0])
-        front_right_knee_xyz = np.array([-np.sqrt(0.5 * front_right_leg ** 2), np.sqrt(0.5 * front_right_leg ** 2), 0]) + front_right_hip_xyz
-        front_right_toe_xyz = np.array([-np.sqrt(0.5 * front_right_ankle ** 2), np.sqrt(0.5 * front_right_ankle ** 2), 0]) + front_right_knee_xyz
+        else:
+            # Fall back to full 8-param encoding
+            fl_up, fl_lo, fr_up, fr_lo, bl_up, bl_lo, br_up, br_lo = body_raw
 
-        back_left_hip_xyz = np.array([-0.2, -0.2, 0])
-        back_left_knee_xyz = np.array([-np.sqrt(0.5 * back_left_leg ** 2), -np.sqrt(0.5 * back_left_leg ** 2), 0]) + back_left_hip_xyz
-        back_left_toe_xyz = np.array([-np.sqrt(0.5 * back_left_ankle ** 2), -np.sqrt(0.5 * back_left_ankle ** 2), 0]) + back_left_knee_xyz
+        # ------------------------------------------------------------------
+        # 3-D coordinates (relative tree structure, same as default skeleton)
+        # ------------------------------------------------------------------
+        def _leg(hip_xyz, dx, dy, upper, lower):
+            """Return (hip, knee, toe) given hip offset and segment lengths."""
+            step = np.sqrt(0.5) * upper
+            knee = hip_xyz + np.array([dx * step, dy * step, 0.0])
+            step2 = np.sqrt(0.5) * lower
+            toe  = knee  + np.array([dx * step2, dy * step2, 0.0])
+            return hip_xyz, knee, toe
 
-        back_right_hip_xyz = np.array([0.2, -0.2, 0])
-        back_right_knee_xyz = np.array([np.sqrt(0.5 * back_right_leg ** 2), -np.sqrt(0.5 * back_right_leg ** 2), 0]) + back_right_hip_xyz
-        back_right_toe_xyz = np.array([np.sqrt(0.5 * back_right_ankle ** 2), -np.sqrt(0.5 * back_right_ankle ** 2), 0]) + back_right_knee_xyz
+        fl_h, fl_k, fl_t = _leg(np.array([ 0.2,  0.2, 0]),  1,  1, fl_up, fl_lo)
+        fr_h, fr_k, fr_t = _leg(np.array([-0.2,  0.2, 0]), -1,  1, fr_up, fr_lo)
+        bl_h, bl_k, bl_t = _leg(np.array([-0.2, -0.2, 0]), -1, -1, bl_up, bl_lo)
+        br_h, br_k, br_t = _leg(np.array([ 0.2, -0.2, 0]),  1, -1, br_up, br_lo)
 
-        points = np.vstack([front_left_hip_xyz,
-                            front_left_knee_xyz,
-                            front_left_toe_xyz,
-                            front_right_hip_xyz,
-                            front_right_knee_xyz,
-                            front_right_toe_xyz,
-                            back_left_hip_xyz,
-                            back_left_knee_xyz,
-                            back_left_toe_xyz,
-                            back_right_hip_xyz,
-                            back_right_knee_xyz,
-                            back_right_toe_xyz,
-                            ])
+        points = np.vstack([
+            fl_h, fl_k, fl_t,
+            fr_h, fr_k, fr_t,
+            bl_h, bl_k, bl_t,
+            br_h, br_k, br_t,
+        ])
 
-        # define the type of connections [FIXED ARCHITECTURE]
         connectivity_mat = np.array(
             [[150, np.inf, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
              [0, 150, np.inf, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -162,7 +210,7 @@ class FinalWorld(World):
              [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
              [0, 0, 0, 0, 0, 0, 0, 0, 0, 150, np.inf, 0, 0],
              [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 150, np.inf, 0],
-             [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], ]
+             [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]]
         )
         return points, connectivity_mat
 
@@ -268,19 +316,18 @@ class FinalWorld(World):
                         render_mode=render_mode, **kwargs)
 
     # ------------------------------------------------------------------
-    # Combined fitness for NSGA-II
+    # Combined fitness
     # ------------------------------------------------------------------
 
     def evaluate_individual(self, genotype: np.ndarray,
                             n_repeats: int = 4, n_steps: int = 500) -> np.ndarray:
         """Evaluate one genotype on all three training environments.
 
-        Returns a 1-D array of three objective values: [flat, ice, hill].
-        """
+        Returns a 1-D array of three objective values: [flat_score, ice_score, hill_score]."""
         self.update_robot_xml(genotype)
         return np.array([
             self._eval_flat(n_repeats, n_steps),
-            self._eval_ice(n_repeats, n_steps),
+            self._eval_ice( n_repeats, n_steps),
             self._eval_hill(n_repeats, n_steps),
         ])
 
@@ -463,7 +510,7 @@ def evaluate_checkpoint(
 
 
 # ---------------------------------------------------------------------------
-# Main training loop
+# Phase-1 training: NSGA-II (multi-objective, inspect Pareto front)
 # ---------------------------------------------------------------------------
 
 def run_multi_task_evolution(
@@ -479,10 +526,12 @@ def run_multi_task_evolution(
     results_dir:     str = None,
     random_seed:     int = 42,
 ) -> None:
+    """NSGA-II phase: evolves the full population, saves Pareto front."""
     np.random.seed(random_seed)
 
     world = FinalWorld()
-    print(f"Genotype : {world.n_params} params"
+    print(f"Controller    : {type(world.controller).__name__}")
+    print(f"Genotype      : {world.n_params} params"
           f"  (controller={world.n_weights}, body={world.n_body_params})")
 
     if results_dir is None:
@@ -515,27 +564,25 @@ def run_multi_task_evolution(
             fitnesses[idx] = world.evaluate_individual(
                 genotype, n_repeats=n_repeats, n_steps=n_steps
             )
-            scalar = float(fitnesses[idx].sum())
+            scalar = float(fitnesses[idx].min())   # ← min objective = generalist proxy
             if scalar > _best_scalar:
                 _best_scalar = scalar
-                shutil.copy2(
-                    join(world.temp_dir.name, "Robot.xml"),
-                    _best_xml_stage,
-                )
+                shutil.copy2(join(world.temp_dir.name, "Robot.xml"), _best_xml_stage)
+
         save_ckpt = (gen % ckpt_interval == 0)
         ea.tell(pop, fitnesses, save_checkpoint=save_ckpt)
         if save_ckpt:
-            shutil.copy2(
-                _best_xml_stage,
-                join(results_dir, str(gen), "Robot.xml"),
-            )
+            shutil.copy2(_best_xml_stage,
+                         join(results_dir, str(gen), "Robot.xml"))
 
-    # --- Training summary ---
-    best_f = ea.f_best_so_far  # shape (3,) for NSGA-II
+    # ------------------------------------------------------------------
+    # Save the best generalist (highest min-objective in final population)
+    # ------------------------------------------------------------------
+    last_f = ea.f_best_so_far
     score_path = join(results_dir, "training_score.txt")
     with open(score_path, "w") as f:
         f.write("=" * 60 + "\n")
-        f.write("MICRO-515 Final Project — Training Summary\n")
+        f.write("MICRO-515 Final Project — NSGA-II Training Summary\n")
         f.write("=" * 60 + "\n\n")
         f.write(f"Generations     : {num_generations}\n")
         f.write(f"Population size : {population_size}\n")
@@ -543,22 +590,135 @@ def run_multi_task_evolution(
                 f"  ({world.n_weights} params)\n")
         f.write(f"Genotype size   : {world.n_params}"
                 f"  (controller={world.n_weights}, body={world.n_body_params})\n\n")
-        f.write("Best individual (highest sum of objectives):\n")
-        labels = ["flat", "ice", "hill"]
-        for label, val in zip(labels, best_f):
+        f.write("Best individual (highest min-objective):\n")
+        for label, val in zip(["flat", "ice", "hill"], last_f):
             f.write(f"  {label:<6}: {float(val):10.2f}\n")
-        f.write(f"  {'sum':<6}: {float(best_f.sum()):10.2f}\n")
+        f.write(f"  {'min':<6}: {float(last_f.min()):10.2f}\n")
     print(f"\nTraining summary saved to: {score_path}")
 
 
-if __name__ == "__main__":
-    # Quick smoke-test — 2 generations, tiny population
-    run_multi_task_evolution(
-        num_generations=100,
-        population_size=32,
-        n_parents=32,
-        n_repeats=2,
-        n_steps=100,
-        ckpt_interval=1,
-        results_dir=join(ROOT_DIR, "results", "final_test"),
+# ---------------------------------------------------------------------------
+# Phase-2 training: CMA-ES  (single-objective refinement)
+#
+# After inspecting the NSGA-II Pareto front, load the best generalist
+# genotype and fine-tune with CMA-ES using  min(f1, f2, f3)  as the scalar
+# objective.  This typically converges faster than NSGA-II for a single
+# target point on the front.
+#
+# Usage:
+#   python final_project_train.py --phase2 --seed_path results/final_project/x_best.npy
+# ---------------------------------------------------------------------------
+
+def run_cmaes_refinement(
+    seed_genotype:   np.ndarray,
+    num_generations: int   = 100,
+    population_size: int   = 32,
+    sigma:           float = 0.2,   # small sigma → local refinement
+    bounds:          tuple = (-1, 1),
+    n_repeats:       int   = 4,
+    n_steps:         int   = 500,
+    ckpt_interval:   int   = 10,
+    results_dir:     str   = None,
+    random_seed:     int   = 42,
+) -> None:
+    """CMA-ES phase: refine a seed solution using min-objective scalarisation."""
+    np.random.seed(random_seed)
+
+    world = FinalWorld()
+    print(f"Controller    : {type(world.controller).__name__}")
+    print(f"Genotype      : {world.n_params} params"
+          f"  (controller={world.n_weights}, body={world.n_body_params})")
+
+    if results_dir is None:
+        results_dir = join(ROOT_DIR, "results", "final_project_cmaes")
+
+    ea = CMAESAPI(
+        n_params=world.n_params,
+        population_size=population_size,
+        num_generations=num_generations,
+        sigma=sigma,
+        bounds=bounds,
+        output_dir=results_dir,
     )
+
+    # Warm-start: replace CMA-ES initial mean with the seed genotype
+    ea.es.x0 = seed_genotype.tolist()
+
+    print(f"\nRunning CMA-ES  —  {num_generations} generations  pop={population_size}")
+    print(f"Objective  : min(flat, ice, hill)  [generalist scalarisation]")
+    print(f"Seed       : provided ({seed_genotype.shape})")
+    print(f"Checkpoints: {results_dir}\n")
+
+    os.makedirs(results_dir, exist_ok=True)
+    _best_xml_stage = join(results_dir, "_best_robot.xml")
+
+    for gen in range(num_generations):
+        pop      = ea.ask()                         # (popsize, n_params)
+        fitnesses = np.empty(len(pop))
+
+        for idx, genotype in enumerate(pop):
+            f3 = world.evaluate_individual(genotype, n_repeats=n_repeats, n_steps=n_steps)
+            fitnesses[idx] = float(f3.min())        # ← min-objective scalar
+
+            if fitnesses[idx] >= ea.f_best_so_far:
+                shutil.copy2(join(world.temp_dir.name, "Robot.xml"), _best_xml_stage)
+
+        save_ckpt = (gen % ckpt_interval == 0)
+        ea.tell(pop, fitnesses, save_checkpoint=save_ckpt)
+
+        if save_ckpt and os.path.isfile(_best_xml_stage):
+            shutil.copy2(_best_xml_stage,
+                         join(results_dir, str(gen), "Robot.xml"))
+
+        if gen % 5 == 0:
+            print(f"Gen {gen:4d}  best_min={ea.f_best_so_far:.2f}"
+                  f"  mean={fitnesses.mean():.2f} ± {fitnesses.std():.2f}")
+
+    print(f"\nCMA-ES refinement complete.  Best min-score: {ea.f_best_so_far:.2f}")
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--phase2", action="store_true",
+                        help="Run CMA-ES refinement instead of NSGA-II")
+    parser.add_argument("--seed_path", type=str, default=None,
+                        help="Path to x_best.npy for CMA-ES warm-start")
+    parser.add_argument("--results_dir", type=str, default=None)
+    args = parser.parse_args()
+
+    if args.phase2:
+        if args.seed_path is None:
+            # Auto-locate most recent NSGA-II checkpoint
+            nsga_dir = join(ROOT_DIR, "results", "final_project")
+            last     = get_last_checkpoint_dir(nsga_dir)
+            seed_path = join(last or nsga_dir, "x_best.npy")
+        else:
+            seed_path = args.seed_path
+        print(f"Loading seed from: {seed_path}")
+        seed = np.load(seed_path)
+        run_cmaes_refinement(
+            seed_genotype=seed,
+            num_generations=100,
+            population_size=32,
+            sigma=0.2,
+            n_repeats=2,
+            n_steps=200,
+            ckpt_interval=5,
+            results_dir=args.results_dir,
+        )
+    else:
+        run_multi_task_evolution(
+            num_generations=100,
+            population_size=32,
+            n_parents=32,
+            n_repeats=2,
+            n_steps=200,
+            ckpt_interval=1,
+            results_dir=args.results_dir or join(ROOT_DIR, "results", "final_test"),
+        )
