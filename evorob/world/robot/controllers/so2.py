@@ -1,3 +1,4 @@
+"""evorob/world/robot/controllers/so2.py"""
 import numpy as np
 
 from evorob.world.robot.controllers.base import Controller

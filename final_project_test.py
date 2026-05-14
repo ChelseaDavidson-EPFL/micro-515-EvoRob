@@ -43,7 +43,7 @@ import argparse
 import os
 import numpy as np
 
-os.environ.setdefault("MUJOCO_GL", "egl")
+os.environ.setdefault("MUJOCO_GL", "glfw")
 
 import evorob.world          # registers EvalEnv-v0
 import gymnasium as gym
