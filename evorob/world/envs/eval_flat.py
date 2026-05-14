@@ -76,7 +76,11 @@ class EvalFlatEnv(MujocoEnv, utils.EzPickle):
         cfrc_cost = float(np.sum(self.data.cfrc_ext[1:] ** 2) * self._cfrc_cost_weight)
 
         terminated = self._is_terminated()
-        reward = healthy_reward + x_velocity - ctrl_cost - cfrc_cost
+
+        # heavily weight forward velocity, penalise standing still
+        forward_bonus = max(x_velocity, 0) * 5.0          # reward forward motion only
+        still_penalty = -1.0 if x_velocity < 0.05 else 0  # explicit penalty for not moving
+        reward = healthy_reward + forward_bonus + still_penalty - ctrl_cost * 0.1 - cfrc_cost * 0.1
 
         info = {
             "healthy_reward": -10.0 if terminated else healthy_reward,

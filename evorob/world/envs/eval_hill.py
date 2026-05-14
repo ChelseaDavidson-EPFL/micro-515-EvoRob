@@ -78,7 +78,11 @@ class EvalHillEnv(MujocoEnv, utils.EzPickle):
         cfrc_cost = float(np.sum(self.data.cfrc_ext[1:] ** 2) * self._cfrc_cost_weight)
 
         terminated = self._is_terminated(xyz_velocity)
-        reward = healthy_reward + x_position - ctrl_cost - cfrc_cost
+        forward_bonus = max(x_position - self._prev_x, 0) * 5.0   # reward progress since last step
+        still_penalty = -1.0 if (x_position - self._prev_x) < 0.001 else 0
+        reward = healthy_reward + forward_bonus + still_penalty - ctrl_cost * 0.1 - cfrc_cost * 0.1
+
+        self._prev_x = x_position   # track position for next step
 
         info = {
             "healthy_reward": -10.0 if terminated else healthy_reward,
@@ -119,6 +123,7 @@ class EvalHillEnv(MujocoEnv, utils.EzPickle):
         qvel = self.init_qvel + noise ** 2 * self.np_random.standard_normal(self.model.nv)
         self.set_state(qpos, qvel)
         self._stuck_count = 0
+        self._prev_x = 0.0
         return self._get_obs()
 
     def _get_reset_info(self):

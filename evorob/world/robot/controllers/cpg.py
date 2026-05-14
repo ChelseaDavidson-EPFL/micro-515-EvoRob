@@ -118,7 +118,12 @@ class CPGController(Controller):
 
         # Runtime state (set by reset_controller / geno2pheno)
         self._A               = self._A_base.copy()
-        self._template_state  = np.ones((output_size * 2, 1)) * (np.sqrt(2) / 2)
+        # Spread phases so legs are out of sync from step 1:
+        phases = np.zeros((output_size * 2, 1))
+        for j in range(output_size):
+            phases[j * 2]     = np.cos(j * np.pi / output_size)   # sine component
+            phases[j * 2 + 1] = np.sin(j * np.pi / output_size)   # cosine component
+        self._template_state = phases
         self._y               = None          # shape (2*n_joints, batch)
 
         # Base frequency vector applied along super-diagonal

@@ -155,7 +155,7 @@ class FinalWorld(World):
 
         Segment length mapping: (g + 1) / 4 + 0.1  →  [0.1, 0.6] m
         """
-        control_params = genotype[:self.n_weights] * 0.1
+        control_params = genotype[:self.n_weights]   # full scale — let CPG produce real actions
         body_raw       = (genotype[self.n_weights:] + 1) / 4 + 0.1
         self.controller.geno2pheno(control_params)
 
@@ -284,20 +284,26 @@ class FinalWorld(World):
             for _ in range(n_repeats)
         ])
         self.controller.reset_controller(batch_size=n_repeats)
-        rewards = np.zeros((n_steps, n_repeats))
-        obs, _ = envs.reset()
-        if self.sensor_fn is not None:
-            obs = self.sensor_fn(obs)
-        done = np.zeros(n_repeats, dtype=bool)
+        rewards   = np.zeros((n_steps, n_repeats))
+        x_start   = None
+        obs, info = envs.reset()
+        done      = np.zeros(n_repeats, dtype=bool)
+
         for t in range(n_steps):
             actions = np.where(done[:, None], 0, self.controller.get_action(obs))
-            obs, r, terminated, truncated, _ = envs.step(actions)
-            if self.sensor_fn is not None:
-                obs = self.sensor_fn(obs)
+            obs, r, terminated, truncated, info_dict = envs.step(actions)
             rewards[t, ~done] = r[~done]
             done |= terminated | truncated
+
+            # Terminate episodes where robot hasn't moved after 200 steps
+            if t == 200:
+                x_pos = np.array([i.get("x_position", 0) for i in info_dict])
+                stuck = x_pos < 0.2          # less than 20 cm in 200 steps = stuck
+                done |= stuck
+
             if done.all():
                 break
+
         envs.close()
         return float(rewards.sum(axis=0).mean())
 
@@ -521,7 +527,7 @@ def run_multi_task_evolution(
     n_steps:         int = 500,
     mutation_prob:   float = 0.3,
     crossover_prob:  float = 0.5,
-    bounds:          tuple = (-1, 1),
+    bounds:          tuple = (-3, 3), # Wider than 1 to let EA find gaits that actually produce motion, rather than converging immediately to the zero-action basin.  
     ckpt_interval:   int = 10,
     results_dir:     str = None,
     random_seed:     int = 42,
