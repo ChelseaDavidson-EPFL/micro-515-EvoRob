@@ -1,5 +1,5 @@
 """
-analyze_results.py
+analyse_training_results.py
 ==================
 Post-training analysis for the NSGA-II multi-task evolution.
 
@@ -13,8 +13,8 @@ Produces:
 
 Usage
 -----
-    python analyze_results.py --results_dir results/final_project     -> For when you're running phase 2
-    python analyze_results.py --results_dir results/final_test        -> For when you're running phase 1 to get pareto front
+    python analyse_training_results.py --results_dir results/final_project     -> For when you're running phase 2
+    python analyse_training_results.py --results_dir results/final_test        -> For when you're running phase 1 to get pareto front
 
 Optional flags
 --------------
