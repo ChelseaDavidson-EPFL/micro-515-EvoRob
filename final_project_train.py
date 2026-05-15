@@ -37,15 +37,16 @@ import gymnasium as gym
 import numpy as np
 import scipy.ndimage
 from PIL import Image
-from gymnasium.vector import AsyncVectorEnv
+from gymnasium.vector import SyncVectorEnv
 
-import evorob.world                         # registers EvalEnv-v0
+import evorob.world  # registers EvalEnv-v0
 from evorob.algorithms.nsga import NSGAII
 from evorob.algorithms.ea_api import CMAESAPI
 from evorob.utils.filesys import get_last_checkpoint_dir, get_project_root
 
 # ── swap this import to go back to the default MLP ──────────────────────────
 from evorob.world.robot.controllers.cpg import CPGController
+
 # from evorob.world.robot.controllers.mlp import NeuralNetworkController
 # ────────────────────────────────────────────────────────────────────────────
 
@@ -53,7 +54,7 @@ from evorob.world.base import World
 from evorob.world.robot.morphology.ant_custom_robot import AntRobot
 
 ROOT_DIR = get_project_root()
-_ASSETS  = join(ROOT_DIR, "evorob", "world", "robot", "assets")
+_ASSETS = join(ROOT_DIR, "evorob", "world", "robot", "assets")
 MAX_EPISODE_STEPS = 1000  # fixed for leaderboard — do not change
 
 # ---------------------------------------------------------------------------
@@ -62,12 +63,13 @@ MAX_EPISODE_STEPS = 1000  # fixed for leaderboard — do not change
 #   4  →  [upper_front, lower_front, upper_back, lower_back]  (more expressive)
 #   8  →  original per-segment encoding
 # ---------------------------------------------------------------------------
-N_BODY_PARAMS = 2   # ← change to 4 for the second phase
+N_BODY_PARAMS = 2  # ← change to 4 for the second phase
 
 
 # ---------------------------------------------------------------------------
 # FinalWorld — body + brain co-evolution across multiple terrains
 # ---------------------------------------------------------------------------
+
 
 class FinalWorld(World):
     """Translates a genotype into a robot phenotype and evaluates it.
@@ -89,40 +91,48 @@ class FinalWorld(World):
         self.controller = CPGController(
             input_size=27,
             output_size=8,
-            hidden_size=8,          # small — SO2 handles the rhythm
+            hidden_size=4,  # Reduced from 8 to shrink search space (~200 params total)
             base_freq=2 * np.pi,
             max_dfreq=np.pi,
             dt=0.05,
             inter_con_density=0.5,
         )
 
-        self.n_weights     = self.controller.n_params
+        self.n_weights = self.controller.n_params
         self.n_body_params = N_BODY_PARAMS
-        self.n_params      = self.n_weights + self.n_body_params
+        self.n_params = self.n_weights + self.n_body_params
 
         # ------------------------------------------------------------------
         # Temp files - Temporary directory holds AntRobot.xml + one combined world XML per terrain
         # ------------------------------------------------------------------
-        self.temp_dir        = TemporaryDirectory()
+        self.temp_dir = TemporaryDirectory()
         self.flat_world_file = join(self.temp_dir.name, "WorldFlat.xml")
-        self.ice_world_file  = join(self.temp_dir.name, "WorldIce.xml")
+        self.ice_world_file = join(self.temp_dir.name, "WorldIce.xml")
         self.hill_world_file = join(self.temp_dir.name, "WorldHill.xml")
-        self.world_file      = self.hill_world_file
+        self.world_file = self.hill_world_file
 
         # ------------------------------------------------------------------
         # Joint geometry
         # ------------------------------------------------------------------
         self.joint_limits = [
-            [-30, 30], [30, 70],
-            [-30, 30], [-70, -30],
-            [-30, 30], [-70, -30],
-            [-30, 30], [30, 70],
+            [-30, 30],
+            [30, 70],
+            [-30, 30],
+            [-70, -30],
+            [-30, 30],
+            [-70, -30],
+            [-30, 30],
+            [30, 70],
         ]
         self.joint_axis = [
-            [0, 0, 1], [-1, 1, 0],
-            [0, 0, 1], [1, 1, 0],
-            [0, 0, 1], [-1, 1, 0],
-            [0, 0, 1], [1, 1, 0],
+            [0, 0, 1],
+            [-1, 1, 0],
+            [0, 0, 1],
+            [1, 1, 0],
+            [0, 0, 1],
+            [-1, 1, 0],
+            [0, 0, 1],
+            [1, 1, 0],
         ]
 
         # Custom sensor function — intercepts the raw env observation before it
@@ -155,8 +165,10 @@ class FinalWorld(World):
 
         Segment length mapping: (g + 1) / 4 + 0.1  →  [0.1, 0.6] m
         """
-        control_params = genotype[:self.n_weights]   # full scale — let CPG produce real actions
-        body_raw       = (genotype[self.n_weights:] + 1) / 4 + 0.1
+        control_params = genotype[
+            : self.n_weights
+        ]  # full scale — let CPG produce real actions
+        body_raw = (genotype[self.n_weights :] + 1) / 4 + 0.1
         self.controller.geno2pheno(control_params)
 
         if N_BODY_PARAMS == 2:
@@ -166,10 +178,10 @@ class FinalWorld(World):
             fl_lo = fr_lo = bl_lo = br_lo = lower
 
         elif N_BODY_PARAMS == 4:
-            fl_up = fr_up = body_raw[0]   # upper front
-            fl_lo = fr_lo = body_raw[1]   # lower front
-            bl_up = br_up = body_raw[2]   # upper back
-            bl_lo = br_lo = body_raw[3]   # lower back
+            fl_up = fr_up = body_raw[0]  # upper front
+            fl_lo = fr_lo = body_raw[1]  # lower front
+            bl_up = br_up = body_raw[2]  # upper back
+            bl_lo = br_lo = body_raw[3]  # lower back
 
         else:
             # Fall back to full 8-param encoding
@@ -183,34 +195,46 @@ class FinalWorld(World):
             step = np.sqrt(0.5) * upper
             knee = hip_xyz + np.array([dx * step, dy * step, 0.0])
             step2 = np.sqrt(0.5) * lower
-            toe  = knee  + np.array([dx * step2, dy * step2, 0.0])
+            toe = knee + np.array([dx * step2, dy * step2, 0.0])
             return hip_xyz, knee, toe
 
-        fl_h, fl_k, fl_t = _leg(np.array([ 0.2,  0.2, 0]),  1,  1, fl_up, fl_lo)
-        fr_h, fr_k, fr_t = _leg(np.array([-0.2,  0.2, 0]), -1,  1, fr_up, fr_lo)
+        fl_h, fl_k, fl_t = _leg(np.array([0.2, 0.2, 0]), 1, 1, fl_up, fl_lo)
+        fr_h, fr_k, fr_t = _leg(np.array([-0.2, 0.2, 0]), -1, 1, fr_up, fr_lo)
         bl_h, bl_k, bl_t = _leg(np.array([-0.2, -0.2, 0]), -1, -1, bl_up, bl_lo)
-        br_h, br_k, br_t = _leg(np.array([ 0.2, -0.2, 0]),  1, -1, br_up, br_lo)
+        br_h, br_k, br_t = _leg(np.array([0.2, -0.2, 0]), 1, -1, br_up, br_lo)
 
-        points = np.vstack([
-            fl_h, fl_k, fl_t,
-            fr_h, fr_k, fr_t,
-            bl_h, bl_k, bl_t,
-            br_h, br_k, br_t,
-        ])
+        points = np.vstack(
+            [
+                fl_h,
+                fl_k,
+                fl_t,
+                fr_h,
+                fr_k,
+                fr_t,
+                bl_h,
+                bl_k,
+                bl_t,
+                br_h,
+                br_k,
+                br_t,
+            ]
+        )
 
         connectivity_mat = np.array(
-            [[150, np.inf, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-             [0, 150, np.inf, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-             [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-             [0, 0, 0, 150, np.inf, 0, 0, 0, 0, 0, 0, 0, 0],
-             [0, 0, 0, 0, 150, np.inf, 0, 0, 0, 0, 0, 0, 0],
-             [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-             [0, 0, 0, 0, 0, 0, 150, np.inf, 0, 0, 0, 0, 0],
-             [0, 0, 0, 0, 0, 0, 0, 150, np.inf, 0, 0, 0, 0],
-             [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-             [0, 0, 0, 0, 0, 0, 0, 0, 0, 150, np.inf, 0, 0],
-             [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 150, np.inf, 0],
-             [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]]
+            [
+                [150, np.inf, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                [0, 150, np.inf, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                [0, 0, 0, 150, np.inf, 0, 0, 0, 0, 0, 0, 0, 0],
+                [0, 0, 0, 0, 150, np.inf, 0, 0, 0, 0, 0, 0, 0],
+                [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                [0, 0, 0, 0, 0, 0, 150, np.inf, 0, 0, 0, 0, 0],
+                [0, 0, 0, 0, 0, 0, 0, 150, np.inf, 0, 0, 0, 0],
+                [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                [0, 0, 0, 0, 0, 0, 0, 0, 0, 150, np.inf, 0, 0],
+                [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 150, np.inf, 0],
+                [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            ]
         )
         return points, connectivity_mat
 
@@ -226,15 +250,19 @@ class FinalWorld(World):
         """
         points, connectivity_mat = self.geno2pheno(genotype)
         robot = AntRobot(
-            points, connectivity_mat, self.joint_limits, self.joint_axis,
-            name="Robot", verbose=False,
+            points,
+            connectivity_mat,
+            self.joint_limits,
+            self.joint_axis,
+            name="Robot",
+            verbose=False,
         )
         robot.xml = robot.define_robot()
-        robot.write_xml(self.temp_dir.name)          # → Robot.xml
+        robot.write_xml(self.temp_dir.name)  # → Robot.xml
 
         for template, world_file in [
             (join(_ASSETS, "flat_world.xml"), self.flat_world_file),
-            (join(_ASSETS, "ice_world.xml"),  self.ice_world_file),
+            (join(_ASSETS, "ice_world.xml"), self.ice_world_file),
             (join(_ASSETS, "hill_world.xml"), self.hill_world_file),
         ]:
             tree = xml.parse(template)
@@ -275,19 +303,25 @@ class FinalWorld(World):
     # Per-terrain evaluation
     # ------------------------------------------------------------------
 
-    def _run_env(self, env_id: str, world_file: str, n_repeats: int, n_steps: int) -> float:
-        """Run n_repeats parallel episodes and return the mean total reward."""
-        envs = AsyncVectorEnv([
-            (lambda eid, wf: lambda: gym.make(
-                eid, robot_path=wf, max_episode_steps=n_steps
-            ))(env_id, world_file)
-            for _ in range(n_repeats)
-        ])
+    def _run_env(
+        self, env_id: str, world_file: str, n_repeats: int, n_steps: int
+    ) -> float:
+        """Run n_repeats episodes and return the mean total reward."""
+        envs = SyncVectorEnv(
+            [
+                (
+                    lambda eid, wf: lambda: gym.make(
+                        eid, robot_path=wf, max_episode_steps=n_steps
+                    )
+                )(env_id, world_file)
+                for _ in range(n_repeats)
+            ]
+        )
         self.controller.reset_controller(batch_size=n_repeats)
-        rewards   = np.zeros((n_steps, n_repeats))
-        x_start   = None
+        rewards = np.zeros((n_steps, n_repeats))
+        x_start = None
         obs, info = envs.reset()
-        done      = np.zeros(n_repeats, dtype=bool)
+        done = np.zeros(n_repeats, dtype=bool)
 
         for t in range(n_steps):
             actions = np.where(done[:, None], 0, self.controller.get_action(obs))
@@ -295,10 +329,10 @@ class FinalWorld(World):
             rewards[t, ~done] = r[~done]
             done |= terminated | truncated
 
-            # Terminate episodes where robot hasn't moved after 200 steps
-            if t == 200:
-                x_pos = np.array([i.get("x_position", 0) for i in info_dict])
-                stuck = x_pos < 0.2          # less than 20 cm in 200 steps = stuck
+            # Terminate early if the robot is stuck (Step 100 instead of 200)
+            if t == 100:
+                x_pos = info_dict.get("x_position", np.zeros(n_repeats))
+                stuck = x_pos < 0.1  # less than 10 cm in 100 steps = stuck
                 done |= stuck
 
             if done.all():
@@ -307,45 +341,54 @@ class FinalWorld(World):
         envs.close()
         return float(rewards.sum(axis=0).mean())
 
-    def _eval_flat(self, n_repeats: int = 4, n_steps: int = 500) -> float:
+    def _eval_flat(self, n_repeats: int = 1, n_steps: int = 400) -> float:
         return self._run_env("FlatEnv-v0", self.flat_world_file, n_repeats, n_steps)
 
-    def _eval_ice(self, n_repeats: int = 4, n_steps: int = 500) -> float:
+    def _eval_ice(self, n_repeats: int = 1, n_steps: int = 400) -> float:
         return self._run_env("IceEnv-v0", self.ice_world_file, n_repeats, n_steps)
 
-    def _eval_hill(self, n_repeats: int = 4, n_steps: int = 500) -> float:
+    def _eval_hill(self, n_repeats: int = 1, n_steps: int = 400) -> float:
         return self._run_env("HillEnv-v0", self.hill_world_file, n_repeats, n_steps)
 
     def create_env(self, render_mode: str = "rgb_array", **kwargs):
         """Return a HillEnv-v0 instance (used for visualisation)."""
-        return gym.make("HillEnv-v0", robot_path=self.hill_world_file,
-                        render_mode=render_mode, **kwargs)
+        return gym.make(
+            "HillEnv-v0",
+            robot_path=self.hill_world_file,
+            render_mode=render_mode,
+            **kwargs,
+        )
 
     # ------------------------------------------------------------------
     # Combined fitness
     # ------------------------------------------------------------------
 
-    def evaluate_individual(self, genotype: np.ndarray,
-                            n_repeats: int = 4, n_steps: int = 500) -> np.ndarray:
+    def evaluate_individual(
+        self, genotype: np.ndarray, n_repeats: int = 1, n_steps: int = 400
+    ) -> np.ndarray:
         """Evaluate one genotype on all three training environments.
 
-        Returns a 1-D array of three objective values: [flat_score, ice_score, hill_score]."""
+        Returns a 1-D array of three objective values: [flat_score, ice_score, hill_score].
+        """
         self.update_robot_xml(genotype)
-        return np.array([
-            self._eval_flat(n_repeats, n_steps),
-            self._eval_ice( n_repeats, n_steps),
-            self._eval_hill(n_repeats, n_steps),
-        ])
+        return np.array(
+            [
+                self._eval_flat(n_repeats, n_steps),
+                self._eval_ice(n_repeats, n_steps),
+                self._eval_hill(n_repeats, n_steps),
+            ]
+        )
 
 
 # ---------------------------------------------------------------------------
 # Neutral leaderboard evaluation  (TA-graded — do not modify)
 # ---------------------------------------------------------------------------
 
+
 def evaluate_checkpoint(
     checkpoint_dir: str,
     output_dir: str = "evaluation_output",
-    n_episodes: int = 256,          # set to 256 for submission; lower for testing
+    n_episodes: int = 256,  # set to 256 for submission; lower for testing
 ) -> dict | None:
     """Evaluate the best genotype from a checkpoint on all three training terrains.
 
@@ -357,8 +400,8 @@ def evaluate_checkpoint(
         output_dir:     Where to save the score file and videos.
         n_episodes:     Episodes per terrain (256 for submission).
     """
-    MAX_STEPS = MAX_EPISODE_STEPS   # DO NOT CHANGE
-    SEED      = 0                   # DO NOT CHANGE
+    MAX_STEPS = MAX_EPISODE_STEPS  # DO NOT CHANGE
+    SEED = 0  # DO NOT CHANGE
 
     # --- Locate checkpoint ---
     last_gen = get_last_checkpoint_dir(checkpoint_dir)
@@ -379,25 +422,34 @@ def evaluate_checkpoint(
     world = FinalWorld()
     world.update_robot_xml(x_best)
     ctrl_name = type(world.controller).__name__
-    print(f"Controller: {ctrl_name}  |  n_weights={world.n_weights}"
-          f"  |  genotype size={world.n_params}\n")
+    print(
+        f"Controller: {ctrl_name}  |  n_weights={world.n_weights}"
+        f"  |  genotype size={world.n_params}\n"
+    )
 
     terrains = {
         "flat": ("FlatEnv-v0", world.flat_world_file),
-        "ice":  ("IceEnv-v0",  world.ice_world_file),
+        "ice": ("IceEnv-v0", world.ice_world_file),
         "hill": ("HillEnv-v0", world.hill_world_file),
     }
 
     def _neutral(info: dict) -> float:
-        return (float(info.get("healthy_reward", 1.0))
-                + float(info.get("x_position",   0.0))
-                - float(info.get("ctrl_cost",     0.0))
-                - float(info.get("cfrc_cost",     0.0)))
+        return (
+            float(info.get("healthy_reward", 1.0))
+            + float(info.get("x_position", 0.0))
+            - float(info.get("ctrl_cost", 0.0))
+            - float(info.get("cfrc_cost", 0.0))
+        )
 
     def _stats(values: list) -> dict:
         arr = np.asarray(values)
-        return dict(mean=float(arr.mean()), std=float(arr.std()),
-                    best=float(arr.max()), worst=float(arr.min()), values=values)
+        return dict(
+            mean=float(arr.mean()),
+            std=float(arr.std()),
+            best=float(arr.max()),
+            worst=float(arr.min()),
+            values=values,
+        )
 
     def _run(env_id: str, world_file: str) -> list:
         rng = np.random.default_rng(SEED)
@@ -405,7 +457,7 @@ def evaluate_checkpoint(
         rewards = []
         for ep in range(n_episodes):
             world.controller.reset_controller(batch_size=1)
-            obs, _ = env.reset(seed=int(rng.integers(0, 2 ** 31)))
+            obs, _ = env.reset(seed=int(rng.integers(0, 2**31)))
             total, done = 0.0, False
             while not done:
                 action = world.controller.get_action(obs)
@@ -421,8 +473,13 @@ def evaluate_checkpoint(
     def _record(env_id: str, world_file: str, out_path: str) -> None:
         try:
             import imageio
-            env = gym.make(env_id, robot_path=world_file,
-                           render_mode="rgb_array", max_episode_steps=MAX_STEPS)
+
+            env = gym.make(
+                env_id,
+                robot_path=world_file,
+                render_mode="rgb_array",
+                max_episode_steps=MAX_STEPS,
+            )
             world.controller.reset_controller(batch_size=1)
             obs, _ = env.reset(seed=SEED)
             frames = []
@@ -461,12 +518,14 @@ def evaluate_checkpoint(
         )
         print(row)
     print(sep)
-    print(f"  {'mean':>4}   " + "   ".join(
-        f"{results[n]['mean']:>{col_w}.2f}" for n in t_names
-    ))
-    print(f"  {'std':>4}   " + "   ".join(
-        f"{results[n]['std']:>{col_w}.2f}" for n in t_names
-    ))
+    print(
+        f"  {'mean':>4}   "
+        + "   ".join(f"{results[n]['mean']:>{col_w}.2f}" for n in t_names)
+    )
+    print(
+        f"  {'std':>4}   "
+        + "   ".join(f"{results[n]['std']:>{col_w}.2f}" for n in t_names)
+    )
     print()
 
     # --- Record one video per terrain ---
@@ -482,11 +541,15 @@ def evaluate_checkpoint(
         f.write("MICRO-515 Final Project — Evaluation Results\n")
         f.write("=" * col + "\n\n")
         f.write(f"Controller      : {ctrl_name} ({world.n_weights} params)\n")
-        f.write(f"Genotype size   : {world.n_params}"
-                f"  (controller={world.n_weights}, body={world.n_body_params})\n")
+        f.write(
+            f"Genotype size   : {world.n_params}"
+            f"  (controller={world.n_weights}, body={world.n_body_params})\n"
+        )
         f.write(f"Checkpoint      : {checkpoint_dir}\n")
         f.write(f"Episodes/terrain: {n_episodes}\n")
-        f.write(f"Reward          : healthy_reward + x_position - ctrl_cost - cfrc_cost\n\n")
+        f.write(
+            f"Reward          : healthy_reward + x_position - ctrl_cost - cfrc_cost\n\n"
+        )
 
         f.write("=" * col + "\n")
         f.write("SUMMARY\n")
@@ -494,8 +557,10 @@ def evaluate_checkpoint(
         f.write(f"{'Terrain':<8} {'Mean':>9} {'Std':>8} {'Best':>9} {'Worst':>9}\n")
         f.write("-" * col + "\n")
         for terrain_name, r in results.items():
-            f.write(f"{terrain_name:<8} {r['mean']:9.2f} {r['std']:8.2f}"
-                    f" {r['best']:9.2f} {r['worst']:9.2f}\n")
+            f.write(
+                f"{terrain_name:<8} {r['mean']:9.2f} {r['std']:8.2f}"
+                f" {r['best']:9.2f} {r['worst']:9.2f}\n"
+            )
         f.write("\n")
 
         for terrain_name, r in results.items():
@@ -509,8 +574,10 @@ def evaluate_checkpoint(
     print(f"\nScore saved to: {score_path}")
     print("=" * col)
     for terrain_name, r in results.items():
-        print(f"  {terrain_name:<6}: {r['mean']:8.2f} ± {r['std']:7.2f}"
-              f"  best={r['best']:.2f}  worst={r['worst']:.2f}")
+        print(
+            f"  {terrain_name:<6}: {r['mean']:8.2f} ± {r['std']:7.2f}"
+            f"  best={r['best']:.2f}  worst={r['worst']:.2f}"
+        )
     print("=" * col)
     return results
 
@@ -519,26 +586,32 @@ def evaluate_checkpoint(
 # Phase-1 training: NSGA-II (multi-objective, inspect Pareto front)
 # ---------------------------------------------------------------------------
 
+
 def run_multi_task_evolution(
     num_generations: int = 100,
     population_size: int = 100,
-    n_parents:       int = 50,
-    n_repeats:       int = 4,
-    n_steps:         int = 500,
-    mutation_prob:   float = 0.3,
-    crossover_prob:  float = 0.5,
-    bounds:          tuple = (-3, 3), # Wider than 1 to let EA find gaits that actually produce motion, rather than converging immediately to the zero-action basin.  
-    ckpt_interval:   int = 10,
-    results_dir:     str = None,
-    random_seed:     int = 42,
+    n_parents: int = 50,
+    n_repeats: int = 4,
+    n_steps: int = 500,
+    mutation_prob: float = 0.3,
+    crossover_prob: float = 0.5,
+    bounds: tuple = (
+        -3,
+        3,
+    ),  # Wider than 1 to let EA find gaits that actually produce motion, rather than converging immediately to the zero-action basin.
+    ckpt_interval: int = 10,
+    results_dir: str = None,
+    random_seed: int = 42,
 ) -> None:
     """NSGA-II phase: evolves the full population, saves Pareto front."""
     np.random.seed(random_seed)
 
     world = FinalWorld()
     print(f"Controller    : {type(world.controller).__name__}")
-    print(f"Genotype      : {world.n_params} params"
-          f"  (controller={world.n_weights}, body={world.n_body_params})")
+    print(
+        f"Genotype      : {world.n_params} params"
+        f"  (controller={world.n_weights}, body={world.n_body_params})"
+    )
 
     if results_dir is None:
         results_dir = join(ROOT_DIR, "results", "final_project")
@@ -570,16 +643,15 @@ def run_multi_task_evolution(
             fitnesses[idx] = world.evaluate_individual(
                 genotype, n_repeats=n_repeats, n_steps=n_steps
             )
-            scalar = float(fitnesses[idx].min())   # ← min objective = generalist proxy
+            scalar = float(fitnesses[idx].min())  # ← min objective = generalist proxy
             if scalar > _best_scalar:
                 _best_scalar = scalar
                 shutil.copy2(join(world.temp_dir.name, "Robot.xml"), _best_xml_stage)
 
-        save_ckpt = (gen % ckpt_interval == 0)
+        save_ckpt = gen % ckpt_interval == 0
         ea.tell(pop, fitnesses, save_checkpoint=save_ckpt)
         if save_ckpt:
-            shutil.copy2(_best_xml_stage,
-                         join(results_dir, str(gen), "Robot.xml"))
+            shutil.copy2(_best_xml_stage, join(results_dir, str(gen), "Robot.xml"))
 
     # ------------------------------------------------------------------
     # Save the best generalist (highest min-objective in final population)
@@ -592,10 +664,14 @@ def run_multi_task_evolution(
         f.write("=" * 60 + "\n\n")
         f.write(f"Generations     : {num_generations}\n")
         f.write(f"Population size : {population_size}\n")
-        f.write(f"Controller      : {type(world.controller).__name__}"
-                f"  ({world.n_weights} params)\n")
-        f.write(f"Genotype size   : {world.n_params}"
-                f"  (controller={world.n_weights}, body={world.n_body_params})\n\n")
+        f.write(
+            f"Controller      : {type(world.controller).__name__}"
+            f"  ({world.n_weights} params)\n"
+        )
+        f.write(
+            f"Genotype size   : {world.n_params}"
+            f"  (controller={world.n_weights}, body={world.n_body_params})\n\n"
+        )
         f.write("Best individual (highest min-objective):\n")
         for label, val in zip(["flat", "ice", "hill"], last_f):
             f.write(f"  {label:<6}: {float(val):10.2f}\n")
@@ -615,25 +691,28 @@ def run_multi_task_evolution(
 #   python final_project_train.py --phase2 --seed_path results/final_project/x_best.npy
 # ---------------------------------------------------------------------------
 
+
 def run_cmaes_refinement(
-    seed_genotype:   np.ndarray,
-    num_generations: int   = 100,
-    population_size: int   = 32,
-    sigma:           float = 0.2,   # small sigma → local refinement
-    bounds:          tuple = (-1, 1),
-    n_repeats:       int   = 4,
-    n_steps:         int   = 500,
-    ckpt_interval:   int   = 10,
-    results_dir:     str   = None,
-    random_seed:     int   = 42,
+    seed_genotype: np.ndarray,
+    num_generations: int = 100,
+    population_size: int = 32,
+    sigma: float = 0.2,  # small sigma → local refinement
+    bounds: tuple = (-1, 1),
+    n_repeats: int = 4,
+    n_steps: int = 500,
+    ckpt_interval: int = 10,
+    results_dir: str = None,
+    random_seed: int = 42,
 ) -> None:
     """CMA-ES phase: refine a seed solution using min-objective scalarisation."""
     np.random.seed(random_seed)
 
     world = FinalWorld()
     print(f"Controller    : {type(world.controller).__name__}")
-    print(f"Genotype      : {world.n_params} params"
-          f"  (controller={world.n_weights}, body={world.n_body_params})")
+    print(
+        f"Genotype      : {world.n_params} params"
+        f"  (controller={world.n_weights}, body={world.n_body_params})"
+    )
 
     if results_dir is None:
         results_dir = join(ROOT_DIR, "results", "final_project_cmaes")
@@ -659,26 +738,29 @@ def run_cmaes_refinement(
     _best_xml_stage = join(results_dir, "_best_robot.xml")
 
     for gen in range(num_generations):
-        pop      = ea.ask()                         # (popsize, n_params)
+        pop = ea.ask()  # (popsize, n_params)
         fitnesses = np.empty(len(pop))
 
         for idx, genotype in enumerate(pop):
-            f3 = world.evaluate_individual(genotype, n_repeats=n_repeats, n_steps=n_steps)
-            fitnesses[idx] = float(f3.min())        # ← min-objective scalar
+            f3 = world.evaluate_individual(
+                genotype, n_repeats=n_repeats, n_steps=n_steps
+            )
+            fitnesses[idx] = float(f3.min())  # ← min-objective scalar
 
             if fitnesses[idx] >= ea.f_best_so_far:
                 shutil.copy2(join(world.temp_dir.name, "Robot.xml"), _best_xml_stage)
 
-        save_ckpt = (gen % ckpt_interval == 0)
+        save_ckpt = gen % ckpt_interval == 0
         ea.tell(pop, fitnesses, save_checkpoint=save_ckpt)
 
         if save_ckpt and os.path.isfile(_best_xml_stage):
-            shutil.copy2(_best_xml_stage,
-                         join(results_dir, str(gen), "Robot.xml"))
+            shutil.copy2(_best_xml_stage, join(results_dir, str(gen), "Robot.xml"))
 
         if gen % 5 == 0:
-            print(f"Gen {gen:4d}  best_min={ea.f_best_so_far:.2f}"
-                  f"  mean={fitnesses.mean():.2f} ± {fitnesses.std():.2f}")
+            print(
+                f"Gen {gen:4d}  best_min={ea.f_best_so_far:.2f}"
+                f"  mean={fitnesses.mean():.2f} ± {fitnesses.std():.2f}"
+            )
 
     print(f"\nCMA-ES refinement complete.  Best min-score: {ea.f_best_so_far:.2f}")
 
@@ -691,10 +773,15 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--phase2", action="store_true",
-                        help="Run CMA-ES refinement instead of NSGA-II")
-    parser.add_argument("--seed_path", type=str, default=None,
-                        help="Path to x_best.npy for CMA-ES warm-start")
+    parser.add_argument(
+        "--phase2", action="store_true", help="Run CMA-ES refinement instead of NSGA-II"
+    )
+    parser.add_argument(
+        "--seed_path",
+        type=str,
+        default=None,
+        help="Path to x_best.npy for CMA-ES warm-start",
+    )
     parser.add_argument("--results_dir", type=str, default=None)
     args = parser.parse_args()
 
@@ -702,7 +789,7 @@ if __name__ == "__main__":
         if args.seed_path is None:
             # Auto-locate most recent NSGA-II checkpoint
             nsga_dir = join(ROOT_DIR, "results", "final_project")
-            last     = get_last_checkpoint_dir(nsga_dir)
+            last = get_last_checkpoint_dir(nsga_dir)
             seed_path = join(last or nsga_dir, "x_best.npy")
         else:
             seed_path = args.seed_path
@@ -721,10 +808,10 @@ if __name__ == "__main__":
     else:
         run_multi_task_evolution(
             num_generations=100,
-            population_size=32,
-            n_parents=32,
-            n_repeats=2,
-            n_steps=200,
-            ckpt_interval=1,
+            population_size=96,  # Increased to better explore Pareto front
+            n_parents=96,
+            n_repeats=1,  # Use 1 repeat during training for speed
+            n_steps=400,  # 400 steps is enough to evaluate speed
+            ckpt_interval=5,  # Save less often to reduce disk I/O
             results_dir=args.results_dir or join(ROOT_DIR, "results", "final_test"),
         )

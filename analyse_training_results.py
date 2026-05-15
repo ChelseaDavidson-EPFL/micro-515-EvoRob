@@ -297,7 +297,7 @@ def print_summary(f: np.ndarray, special: dict) -> None:
 def main():
     parser = argparse.ArgumentParser(description="Analyze NSGA-II results")
     parser.add_argument("--results_dir", type=str,
-                        default="results/final_project",
+                        default="results/final_test",
                         help="Directory containing NSGA-II checkpoints")
     parser.add_argument("--gen", type=int, default=None,
                         help="Generation to load (default: last)")
