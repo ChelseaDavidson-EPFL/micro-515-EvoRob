@@ -63,7 +63,7 @@ MAX_EPISODE_STEPS = 1000  # fixed for leaderboard — do not change
 #   4  →  [upper_front, lower_front, upper_back, lower_back]  (more expressive)
 #   8  →  original per-segment encoding
 # ---------------------------------------------------------------------------
-N_BODY_PARAMS = 2  # ← change to 4 for the second phase
+N_BODY_PARAMS = 4  # ← change to 4 for the second phase
 
 
 # ---------------------------------------------------------------------------
@@ -388,7 +388,7 @@ class FinalWorld(World):
 def evaluate_checkpoint(
     checkpoint_dir: str,
     output_dir: str = "evaluation_output",
-    n_episodes: int = 256,  # set to 256 for submission; lower for testing
+    n_episodes: int = 128,  # set to 256 for submission; lower for testing
 ) -> dict | None:
     """Evaluate the best genotype from a checkpoint on all three training terrains.
 
@@ -807,11 +807,13 @@ if __name__ == "__main__":
         )
     else:
         run_multi_task_evolution(
-            num_generations=100,
+            num_generations=200,
             population_size=96,  # Increased to better explore Pareto front
-            n_parents=96,
-            n_repeats=1,  # Use 1 repeat during training for speed
+            n_parents=48, # 50% selection pressure
+            n_repeats=2,  # Use 1 repeat during training for speed
             n_steps=400,  # 400 steps is enough to evaluate speed
+            mutation_prob=0.5,      # was 0.3 — more exploration to find hill gait
+            crossover_prob=0.3,     # was 0.5 — less crossover, more mutation for diversity
             ckpt_interval=5,  # Save less often to reduce disk I/O
             results_dir=args.results_dir or join(ROOT_DIR, "results", "final_test"),
         )
