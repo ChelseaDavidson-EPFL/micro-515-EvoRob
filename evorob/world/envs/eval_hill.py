@@ -1,3 +1,4 @@
+"""evorob.world.envs.eval_hill"""
 from os import path
 
 import numpy as np
@@ -46,6 +47,7 @@ class EvalHillEnv(MujocoEnv, utils.EzPickle):
         self._cfrc_cost_weight = cfrc_cost_weight
         self._reset_noise_scale = reset_noise_scale
         self._stuck_count = 0
+        self._prev_x = 0.0
 
         MujocoEnv.__init__(
             self, xml_file_path, frame_skip,
@@ -66,32 +68,49 @@ class EvalHillEnv(MujocoEnv, utils.EzPickle):
 
     def step(self, action):
         xyz_before = self.data.body(1).xpos[:3].copy()
+        y_before   = float(xyz_before[1])
         self.do_simulation(action, self.frame_skip)
         xyz_after = self.data.body(1).xpos[:3].copy()
 
         xyz_velocity = (xyz_after - xyz_before) / self.dt
         x_velocity = float(xyz_velocity[0])
         x_position = float(xyz_after[0])
+        y_after      = float(xyz_after[1])
 
         healthy_reward = 1.0
         ctrl_cost = float(np.sum(action ** 2) * self._ctrl_cost_weight)
         cfrc_cost = float(np.sum(self.data.cfrc_ext[1:] ** 2) * self._cfrc_cost_weight)
-
         terminated = self._is_terminated(xyz_velocity)
-        forward_bonus = max(x_position - self._prev_x, 0) * 5.0   # reward progress since last step
-        still_penalty = -1.0 if (x_position - self._prev_x) < 0.001 else 0
-        reward = healthy_reward + forward_bonus + still_penalty - ctrl_cost * 0.1 - cfrc_cost * 0.1
 
-        self._prev_x = x_position   # track position for next step
+        # Forward progress since last step
+        forward_bonus = max(x_position - self._prev_x, 0) * 5.0
+        still_penalty = -2.0 if (x_position - self._prev_x) < 0.001 else 0
+        lateral_penalty = -abs(y_after - y_before) / self.dt * 2.0
+        backward_penalty = -abs(min(x_velocity, 0)) * 3.0
+
+        # Heading: reward torso facing +x
+        R = self.data.body(1).xmat.reshape(3, 3)
+        heading_reward = float(R[:, 0][0]) * 2.0
+
+        reward = (healthy_reward
+                + forward_bonus
+                + still_penalty
+                + lateral_penalty
+                + backward_penalty
+                + heading_reward
+                - ctrl_cost * 0.1
+                - cfrc_cost * 0.1)
+
+        self._prev_x = x_position
 
         info = {
             "healthy_reward": -10.0 if terminated else healthy_reward,
             "x_position": x_position,
             "ctrl_cost": ctrl_cost,
             "cfrc_cost": cfrc_cost,
+            "heading_reward": heading_reward,
             "x_velocity": x_velocity,
         }
-
         if self.render_mode == "human":
             self.render()
         return self._get_obs(), reward, terminated, False, info
@@ -112,7 +131,7 @@ class EvalHillEnv(MujocoEnv, utils.EzPickle):
 
     def _torso_upside_down(self) -> bool:
         R = self.data.body(1).xmat.reshape(3, 3)
-        return float(R[2, 2]) < 0.0
+        return float(R[2, 2]) < 0.1   # was 0.0 — terminate earlier before fully flipped
 
     def _get_obs(self):
         return np.concatenate((self.data.qpos.flat[2:], self.data.qvel.flat.copy()))

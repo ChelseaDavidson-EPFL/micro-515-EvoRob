@@ -341,13 +341,13 @@ class FinalWorld(World):
         envs.close()
         return float(rewards.sum(axis=0).mean())
 
-    def _eval_flat(self, n_repeats: int = 1, n_steps: int = 400) -> float:
+    def _eval_flat(self, n_repeats: int = 3, n_steps: int = 400) -> float:
         return self._run_env("FlatEnv-v0", self.flat_world_file, n_repeats, n_steps)
 
-    def _eval_ice(self, n_repeats: int = 1, n_steps: int = 400) -> float:
+    def _eval_ice(self, n_repeats: int = 3, n_steps: int = 400) -> float:
         return self._run_env("IceEnv-v0", self.ice_world_file, n_repeats, n_steps)
 
-    def _eval_hill(self, n_repeats: int = 1, n_steps: int = 400) -> float:
+    def _eval_hill(self, n_repeats: int = 3, n_steps: int = 400) -> float:
         return self._run_env("HillEnv-v0", self.hill_world_file, n_repeats, n_steps)
 
     def create_env(self, render_mode: str = "rgb_array", **kwargs):
@@ -693,11 +693,11 @@ def run_multi_task_evolution(
 
 
 def run_cmaes_refinement(
-    seed_genotype: np.ndarray,
+    seed_genotype: np.ndarray = None,   # make optional
     num_generations: int = 100,
     population_size: int = 32,
-    sigma: float = 0.2,  # small sigma → local refinement
-    bounds: tuple = (-1, 1),
+    sigma: float = 0.5,  # was 0.2 — larger for cold start exploration
+    bounds: tuple = (-3, 3),            # match NSGA-II bounds
     n_repeats: int = 4,
     n_steps: int = 500,
     ckpt_interval: int = 10,
@@ -727,11 +727,18 @@ def run_cmaes_refinement(
     )
 
     # Warm-start: replace CMA-ES initial mean with the seed genotype
-    ea.es.x0 = seed_genotype.tolist()
+    if seed_genotype is not None:
+        ea.es.x0 = seed_genotype.tolist()
+        print(f"Warm-starting from provided seed")
+        print(f"Seed       : provided ({seed_genotype.shape})")
+
+    else:
+        # Cold start — random initialisation across the full bounds
+        ea.es.x0 = np.random.uniform(bounds[0], bounds[1], world.n_params).tolist()
+        print(f"Cold start — random initialisation")
 
     print(f"\nRunning CMA-ES  —  {num_generations} generations  pop={population_size}")
     print(f"Objective  : min(flat, ice, hill)  [generalist scalarisation]")
-    print(f"Seed       : provided ({seed_genotype.shape})")
     print(f"Checkpoints: {results_dir}\n")
 
     os.makedirs(results_dir, exist_ok=True)
@@ -786,25 +793,31 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.phase2:
-        if args.seed_path is None:
-            # Auto-locate most recent NSGA-II checkpoint
-            nsga_dir = join(ROOT_DIR, "results", "final_project")
-            last = get_last_checkpoint_dir(nsga_dir)
-            seed_path = join(last or nsga_dir, "x_best.npy")
-        else:
+        if args.seed_path is not None:
             seed_path = args.seed_path
-        print(f"Loading seed from: {seed_path}")
-        seed = np.load(seed_path)
-        run_cmaes_refinement(
-            seed_genotype=seed,
-            num_generations=100,
-            population_size=32,
-            sigma=0.2,
-            n_repeats=2,
-            n_steps=200,
-            ckpt_interval=5,
-            results_dir=args.results_dir,
-        )
+            print(f"Loading seed from: {seed_path}")
+            seed = np.load(seed_path)
+            run_cmaes_refinement(
+                seed_genotype=seed,
+                num_generations=100,
+                population_size=32,
+                sigma=0.2,
+                n_repeats=2,
+                n_steps=200,
+                ckpt_interval=5,
+                results_dir=args.results_dir,
+            )
+        else:
+            run_cmaes_refinement(
+                seed_genotype=None,       # cold start
+                num_generations=300,      # more generations since I noted it was still improving
+                population_size=32,
+                sigma=0.5,
+                bounds=(-3, 3),
+                n_repeats=3,              # balance between speed and noise
+                n_steps=500,
+                ckpt_interval=10,
+            )
     else:
         run_multi_task_evolution(
             num_generations=200,

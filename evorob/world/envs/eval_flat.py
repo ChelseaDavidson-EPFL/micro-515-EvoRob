@@ -1,3 +1,4 @@
+"""evorob.world.envs.eval_flat"""
 from os import path
 
 import numpy as np
@@ -67,29 +68,44 @@ class EvalFlatEnv(MujocoEnv, utils.EzPickle):
 
     def step(self, action):
         x_before = self.data.qpos[0]
+        y_before = self.data.qpos[1]          # track lateral position
         self.do_simulation(action, self.frame_skip)
         x_after = self.data.qpos[0]
+        y_after = self.data.qpos[1]
 
         x_velocity = (x_after - x_before) / self.dt
+        y_drift    = abs(y_after - y_before) / self.dt   # lateral velocity
+
         healthy_reward = 1.0
         ctrl_cost = float(np.sum(action ** 2) * self._ctrl_cost_weight)
         cfrc_cost = float(np.sum(self.data.cfrc_ext[1:] ** 2) * self._cfrc_cost_weight)
-
         terminated = self._is_terminated()
 
-        # heavily weight forward velocity, penalise standing still
-        forward_bonus = max(x_velocity, 0) * 5.0          # reward forward motion only
-        still_penalty = -1.0 if x_velocity < 0.05 else 0  # explicit penalty for not moving
-        reward = healthy_reward + forward_bonus + still_penalty - ctrl_cost * 0.1 - cfrc_cost * 0.1
+        forward_bonus  = max(x_velocity, 0) * 5.0
+        still_penalty  = -2.0 if x_velocity < 0.05 else 0   # stronger than before
+        lateral_penalty = -y_drift * 2.0                      # penalise sideways movement
+        backward_penalty = -abs(min(x_velocity, 0)) * 3.0     # explicit backward penalty
+
+        R = self.data.body(1).xmat.reshape(3, 3)
+        heading_reward = float(R[:, 0][0]) * 2.0
+
+        reward = (healthy_reward
+                + forward_bonus
+                + still_penalty
+                + lateral_penalty
+                + backward_penalty
+                + heading_reward
+                - ctrl_cost * 0.1
+                - cfrc_cost * 0.1)
 
         info = {
             "healthy_reward": -10.0 if terminated else healthy_reward,
             "x_position": float(x_after),
             "ctrl_cost": ctrl_cost,
             "cfrc_cost": cfrc_cost,
+            "heading_reward": heading_reward,
             "x_velocity": x_velocity,
         }
-
         if self.render_mode == "human":
             self.render()
         return self._get_obs(), reward, terminated, False, info
