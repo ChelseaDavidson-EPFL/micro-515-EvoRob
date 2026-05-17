@@ -89,7 +89,7 @@ class FinalWorld(World):
         #              Whatever you choose determines self.n_weights (controller parameter count).
         # ------------------------------------------------------------------
         self.controller = CPGController(
-            input_size=27,
+            input_size=49,
             output_size=8,
             hidden_size=4,  # Reduced from 8 to shrink search space (~200 params total)
             base_freq=2 * np.pi,
@@ -811,7 +811,7 @@ if __name__ == "__main__":
             run_cmaes_refinement(
                 seed_genotype=None,       # cold start
                 num_generations=300,      # more generations since I noted it was still improving
-                population_size=32,
+                population_size=96,  # Increased to better explore
                 sigma=0.5,
                 bounds=(-3, 3),
                 n_repeats=3,              # balance between speed and noise
