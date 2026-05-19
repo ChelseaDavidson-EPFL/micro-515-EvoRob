@@ -1,0 +1,55 @@
+============================================================
+MICRO-515 Final Project — Evaluation Results
+============================================================
+
+Controller      : CPGController (138 params)
+Genotype size   : 144  (controller=138, body=6)
+Checkpoint      : results/test_hexapod_cmaes_curriculum_h1_d02
+Episodes/terrain: 8
+Reward          : healthy_reward + x_position - ctrl_cost - cfrc_cost
+
+============================================================
+SUMMARY
+============================================================
+Terrain       Mean      Std      Best     Worst
+------------------------------------------------------------
+flat        -42.31   411.41    469.41   -756.23
+ice         -42.31   411.41    469.41   -756.23
+hill       -367.74   626.55    451.47  -1686.25
+
+--------------------------------------------------
+FLAT — Per-episode rewards
+--------------------------------------------------
+  Episode   1:     327.13
+  Episode   2:     388.37
+  Episode   3:    -122.50
+  Episode   4:     469.41
+  Episode   5:    -756.23
+  Episode   6:    -446.91
+  Episode   7:     106.13
+  Episode   8:    -303.85
+
+--------------------------------------------------
+ICE — Per-episode rewards
+--------------------------------------------------
+  Episode   1:     327.13
+  Episode   2:     388.37
+  Episode   3:    -122.50
+  Episode   4:     469.41
+  Episode   5:    -756.23
+  Episode   6:    -446.91
+  Episode   7:     106.13
+  Episode   8:    -303.85
+
+--------------------------------------------------
+HILL — Per-episode rewards
+--------------------------------------------------
+  Episode   1:    -244.73
+  Episode   2:    -988.65
+  Episode   3:    -273.20
+  Episode   4:    -223.69
+  Episode   5:   -1686.25
+  Episode   6:     451.47
+  Episode   7:     -68.74
+  Episode   8:      91.84
+

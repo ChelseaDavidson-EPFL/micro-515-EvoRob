@@ -28,13 +28,15 @@ import os
 from os.path import join
 
 import matplotlib
-matplotlib.use("Agg")           # headless — works without a display
+
+matplotlib.use("Agg")  # headless — works without a display
 import matplotlib.pyplot as plt
 import numpy as np
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def load_checkpoint(results_dir: str, gen: int | None = None):
     """Load x.npy and f.npy from a checkpoint directory.
@@ -70,8 +72,8 @@ def load_checkpoint(results_dir: str, gen: int | None = None):
                 return np.load(p, allow_pickle=True)
         raise FileNotFoundError(f"{fname} not found in {gen_dir} or {results_dir}")
 
-    x = _load("x.npy")   # shape (pop, n_params)
-    f = _load("f.npy")   # shape (pop, 3)
+    x = _load("x.npy")  # shape (pop, n_params)
+    f = _load("f.npy")  # shape (pop, 3)
     print(f"Loaded generation {gen}:  population={x.shape[0]}  n_params={x.shape[1]}")
     return x, f, gen
 
@@ -82,7 +84,8 @@ def load_all_generations(results_dir: str):
     Returns (gens, mean_per_gen, best_min_per_gen).
     """
     subdirs = sorted(
-        int(n) for n in os.listdir(results_dir)
+        int(n)
+        for n in os.listdir(results_dir)
         if os.path.isdir(join(results_dir, n)) and n.isdigit()
     )
 
@@ -93,8 +96,8 @@ def load_all_generations(results_dir: str):
             continue
         f = np.load(p, allow_pickle=True)
         gens.append(g)
-        means.append(f.mean(axis=0))            # (3,)
-        best_mins.append(f.min(axis=1).max())   # best generalist score
+        means.append(f.mean(axis=0))  # (3,)
+        best_mins.append(f.min(axis=1).max())  # best generalist score
     return np.array(gens), np.array(means), np.array(best_mins)
 
 
@@ -104,14 +107,30 @@ def pick_specialists_and_generalist(x: np.ndarray, f: np.ndarray):
     Specialist  = individual with the highest score on one terrain.
     Generalist  = individual with the highest  min(f1, f2, f3).
     """
+    if f.ndim == 1:
+        idx_best = int(np.argmax(f))
+        return {
+            "flat": idx_best,
+            "ice": idx_best,
+            "hill": idx_best,
+            "generalist": idx_best,
+        }
+    if f.ndim == 1:
+        idx_best = int(np.argmax(f))
+        return {
+            "flat": idx_best,
+            "ice": idx_best,
+            "hill": idx_best,
+            "generalist": idx_best,
+        }
     idx_flat = int(np.argmax(f[:, 0]))
-    idx_ice  = int(np.argmax(f[:, 1]))
+    idx_ice = int(np.argmax(f[:, 1]))
     idx_hill = int(np.argmax(f[:, 2]))
-    idx_gen  = int(np.argmax(f.min(axis=1)))
+    idx_gen = int(np.argmax(f.min(axis=1)))
     return {
-        "flat":       idx_flat,
-        "ice":        idx_ice,
-        "hill":       idx_hill,
+        "flat": idx_flat,
+        "ice": idx_ice,
+        "hill": idx_hill,
         "generalist": idx_gen,
     }
 
@@ -120,23 +139,34 @@ def pick_specialists_and_generalist(x: np.ndarray, f: np.ndarray):
 # Plotting
 # ---------------------------------------------------------------------------
 
+
 def plot_pareto_3d(f: np.ndarray, special: dict, output_dir: str) -> None:
     fig = plt.figure(figsize=(9, 7))
-    ax  = fig.add_subplot(111, projection="3d")
+    ax = fig.add_subplot(111, projection="3d")
 
-    ax.scatter(f[:, 0], f[:, 1], f[:, 2],
-               c="steelblue", alpha=0.4, s=18, label="population")
+    ax.scatter(
+        f[:, 0], f[:, 1], f[:, 2], c="steelblue", alpha=0.4, s=18, label="population"
+    )
 
     colours = {"flat": "red", "ice": "cyan", "hill": "green", "generalist": "gold"}
-    markers = {"flat": "^",   "ice": "s",    "hill": "D",     "generalist": "*"}
-    sizes   = {"flat": 120,   "ice": 120,    "hill": 120,     "generalist": 250}
+    markers = {"flat": "^", "ice": "s", "hill": "D", "generalist": "*"}
+    sizes = {"flat": 120, "ice": 120, "hill": 120, "generalist": 250}
 
     for label, idx in special.items():
-        ax.scatter(f[idx, 0], f[idx, 1], f[idx, 2],
-                   c=colours[label], marker=markers[label],
-                   s=sizes[label], zorder=5, label=label)
+        ax.scatter(
+            f[idx, 0],
+            f[idx, 1],
+            f[idx, 2],
+            c=colours[label],
+            marker=markers[label],
+            s=sizes[label],
+            zorder=5,
+            label=label,
+        )
 
-    ax.set_xlabel("Flat"); ax.set_ylabel("Ice"); ax.set_zlabel("Hill")
+    ax.set_xlabel("Flat")
+    ax.set_ylabel("Ice")
+    ax.set_zlabel("Hill")
     ax.set_title("Pareto front — 3 terrain objectives")
     ax.legend()
     path = join(output_dir, "pareto_3d.png")
@@ -148,23 +178,31 @@ def plot_pareto_3d(f: np.ndarray, special: dict, output_dir: str) -> None:
 
 def plot_pareto_2d(f: np.ndarray, special: dict, output_dir: str) -> None:
     pairs = [
-        (0, 1, "Flat", "Ice",  "pareto_flat_ice.png"),
+        (0, 1, "Flat", "Ice", "pareto_flat_ice.png"),
         (0, 2, "Flat", "Hill", "pareto_flat_hill.png"),
-        (1, 2, "Ice",  "Hill", "pareto_ice_hill.png"),
+        (1, 2, "Ice", "Hill", "pareto_ice_hill.png"),
     ]
     colours = {"flat": "red", "ice": "cyan", "hill": "green", "generalist": "gold"}
-    markers = {"flat": "^",   "ice": "s",    "hill": "D",     "generalist": "*"}
-    sizes   = {"flat": 120,   "ice": 120,    "hill": 120,     "generalist": 250}
+    markers = {"flat": "^", "ice": "s", "hill": "D", "generalist": "*"}
+    sizes = {"flat": 120, "ice": 120, "hill": 120, "generalist": 250}
 
     for xi, yi, xlabel, ylabel, fname in pairs:
         fig, ax = plt.subplots(figsize=(6, 5))
-        ax.scatter(f[:, xi], f[:, yi], c="steelblue", alpha=0.4, s=18,
-                   label="population")
+        ax.scatter(
+            f[:, xi], f[:, yi], c="steelblue", alpha=0.4, s=18, label="population"
+        )
         for label, idx in special.items():
-            ax.scatter(f[idx, xi], f[idx, yi],
-                       c=colours[label], marker=markers[label],
-                       s=sizes[label], zorder=5, label=label)
-        ax.set_xlabel(xlabel); ax.set_ylabel(ylabel)
+            ax.scatter(
+                f[idx, xi],
+                f[idx, yi],
+                c=colours[label],
+                marker=markers[label],
+                s=sizes[label],
+                zorder=5,
+                label=label,
+            )
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel)
         ax.set_title(f"Pareto projection — {xlabel} vs {ylabel}")
         ax.legend()
         path = join(output_dir, fname)
@@ -187,7 +225,8 @@ def plot_convergence(results_dir: str, output_dir: str) -> None:
     colours = ["tab:blue", "tab:cyan", "tab:green"]
     for i, (lbl, col) in enumerate(zip(labels, colours)):
         ax.plot(gens, means[:, i], label=lbl, color=col)
-    ax.set_xlabel("Generation"); ax.set_ylabel("Mean fitness")
+    ax.set_xlabel("Generation")
+    ax.set_ylabel("Mean fitness")
     ax.set_title("Mean fitness per terrain over generations")
     ax.legend()
 
@@ -208,27 +247,42 @@ def plot_convergence(results_dir: str, output_dir: str) -> None:
 # Video recording
 # ---------------------------------------------------------------------------
 
-def record_robot(world, genotype: np.ndarray, env_id: str, out_path: str,
-                 max_steps: int = 1000, seed: int = 0) -> None:
+
+def record_robot(
+    world,
+    genotype: np.ndarray,
+    env_id: str,
+    out_path: str,
+    max_steps: int = 1000,
+    seed: int = 0,
+) -> None:
     try:
         import imageio
-        import gymnasium as gym
+
+        # Fix for imageio ffmpeg plugin calling .tostring() on NumPy 2.0+
+        class FfmpegFrame(np.ndarray):
+            def tostring(self):
+                return self.tobytes()
 
         world.update_robot_xml(genotype)
 
         # Pick the right world file for the environment
         world_file_map = {
             "FlatEnv-v0": world.flat_world_file,
-            "IceEnv-v0":  world.ice_world_file,
+            "IceEnv-v0": world.ice_world_file,
             "HillEnv-v0": world.hill_world_file,
         }
         world_file = world_file_map[env_id]
 
-        env = gym.make(env_id, robot_path=world_file,
-                       render_mode="rgb_array", max_episode_steps=max_steps)
+        env = world._make_env(
+            env_id,
+            world_file,
+            render_mode="rgb_array",
+            max_episode_steps=max_steps,
+        )
         world.controller.reset_controller(batch_size=1)
         obs, _ = env.reset(seed=seed)
-        frames  = []
+        frames = []
         total_r = 0.0
 
         for _ in range(max_steps):
@@ -242,27 +296,43 @@ def record_robot(world, genotype: np.ndarray, env_id: str, out_path: str,
                 break
 
         env.close()
-        imageio.mimwrite(out_path, frames, fps=20)
-        print(f"  Video saved: {out_path}  (total_reward={total_r:.1f}, "
-              f"frames={len(frames)})")
+        if len(frames) == 0:
+            raise Exception("No frames captured")
+
+            writer = imageio.get_writer(out_path, fps=20)
+            for frm in frames:
+                arr = np.asarray(frm)
+                if arr.dtype != np.uint8:
+                    if np.issubdtype(arr.dtype, np.floating) and arr.max() <= 1.0:
+                        arr = (255 * np.clip(arr, 0.0, 1.0)).astype(np.uint8)
+                    else:
+                        arr = arr.astype(np.uint8)
+                writer.append_data(arr.view(FfmpegFrame))
+            writer.close()
+
+        print(
+            f"  Video saved: {out_path}  (total_reward={total_r:.1f}, "
+            f"frames={len(frames)})"
+        )
 
     except Exception as exc:
         print(f"  Video skipped ({out_path}): {exc}")
 
 
-def record_all(world, x: np.ndarray, special: dict, output_dir: str,
-               max_steps: int = 1000) -> None:
+def record_all(
+    world, x: np.ndarray, special: dict, output_dir: str, max_steps: int = 1000
+) -> None:
     """Record one video per specialist/generalist on their respective terrain."""
 
     terrain_map = {
-        "flat":       "FlatEnv-v0",
-        "ice":        "IceEnv-v0",
-        "hill":       "HillEnv-v0",
-        "generalist": "HillEnv-v0",   # test generalist on the hardest terrain
+        "flat": "FlatEnv-v0",
+        "ice": "IceEnv-v0",
+        "hill": "HillEnv-v0",
+        "generalist": "HillEnv-v0",  # test generalist on the hardest terrain
     }
 
     for label, idx in special.items():
-        env_id   = terrain_map[label]
+        env_id = terrain_map[label]
         out_path = join(output_dir, f"video_{label}.mp4")
         print(f"  Recording {label} specialist on {env_id}...")
         record_robot(world, x[idx], env_id, out_path, max_steps=max_steps)
@@ -271,6 +341,7 @@ def record_all(world, x: np.ndarray, special: dict, output_dir: str,
 # ---------------------------------------------------------------------------
 # Console summary
 # ---------------------------------------------------------------------------
+
 
 def print_summary(f: np.ndarray, special: dict) -> None:
     header = f"  {'Label':<12} {'Flat':>8} {'Ice':>8} {'Hill':>8} {'Min':>8} {'Sum':>8}"
@@ -281,12 +352,16 @@ def print_summary(f: np.ndarray, special: dict) -> None:
     print("  " + "-" * 56)
     for label, idx in special.items():
         row = f[idx]
-        print(f"  {label:<12} {row[0]:8.1f} {row[1]:8.1f} {row[2]:8.1f}"
-              f" {row.min():8.1f} {row.sum():8.1f}")
+        print(
+            f"  {label:<12} {row[0]:8.1f} {row[1]:8.1f} {row[2]:8.1f}"
+            f" {row.min():8.1f} {row.sum():8.1f}"
+        )
     print("=" * 60)
-    print(f"  Population mean: flat={f[:,0].mean():.1f}"
-          f"  ice={f[:,1].mean():.1f}"
-          f"  hill={f[:,2].mean():.1f}")
+    print(
+        f"  Population mean: flat={f[:,0].mean():.1f}"
+        f"  ice={f[:,1].mean():.1f}"
+        f"  hill={f[:,2].mean():.1f}"
+    )
     print("=" * 60 + "\n")
 
 
@@ -294,18 +369,45 @@ def print_summary(f: np.ndarray, special: dict) -> None:
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main():
     parser = argparse.ArgumentParser(description="Analyze NSGA-II results")
-    parser.add_argument("--results_dir", type=str,
-                        default="results/final_test",
-                        help="Directory containing NSGA-II checkpoints")
-    parser.add_argument("--gen", type=int, default=None,
-                        help="Generation to load (default: last)")
-    parser.add_argument("--no_video", action="store_true",
-                        help="Skip video recording")
-    parser.add_argument("--output_dir", type=str,
-                        default="analysis_output",
-                        help="Where to save plots and videos")
+    parser.add_argument(
+        "--results_dir",
+        type=str,
+        default="results/final_test",
+        help="Directory containing NSGA-II checkpoints",
+    )
+    parser.add_argument(
+        "--gen", type=int, default=None, help="Generation to load (default: last)"
+    )
+    parser.add_argument("--no_video", action="store_true", help="Skip video recording")
+    parser.add_argument(
+        "--output_dir",
+        type=str,
+        default="analysis_output",
+        help="Where to save plots and videos",
+    )
+    parser.add_argument(
+        "--directional",
+        action="store_true",
+        help="Interpret checkpoints as direction-conditioned models",
+    )
+    parser.add_argument(
+        "--target_direction",
+        type=float,
+        nargs=2,
+        default=(1.0, 0.0),
+        metavar=("DX", "DY"),
+        help="Direction vector used when replaying direction-conditioned checkpoints",
+    )
+    parser.add_argument(
+        "--leg_layout",
+        type=str,
+        choices=["quadruped", "hexapod"],
+        default="quadruped",
+        help="Morphology layout used by the checkpoint",
+    )
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -314,7 +416,7 @@ def main():
     # Load checkpoint
     # ------------------------------------------------------------------
     x, f, gen_loaded = load_checkpoint(args.results_dir, args.gen)
-    special          = pick_specialists_and_generalist(x, f)
+    special = pick_specialists_and_generalist(x, f)
 
     print_summary(f, special)
 
@@ -335,11 +437,18 @@ def main():
         # even if the evorob package isn't installed
         try:
             from final_project_train import FinalWorld
-            world = FinalWorld()
+
+            world = FinalWorld(
+                directional=args.directional,
+                target_direction=tuple(args.target_direction),
+                leg_layout=args.leg_layout,
+            )
             record_all(world, x, special, args.output_dir)
         except ImportError as e:
             print(f"  Could not import FinalWorld: {e}")
-            print("  Run from the project root so final_project_train.py is on the path.")
+            print(
+                "  Run from the project root so final_project_train.py is on the path."
+            )
     else:
         print("Skipping videos (--no_video).")
 

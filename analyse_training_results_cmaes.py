@@ -21,17 +21,60 @@ Optional flags
 
 import argparse
 import os
+import shutil
+import subprocess
 from os.path import join
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
+# ---------------------------------------------------------------------------
+# Video Helper (direct ffmpeg call for NumPy 2.0 compatibility)
+# ---------------------------------------------------------------------------
+
+def _write_video(out_path: str, frames: list[np.ndarray], fps: int = 20) -> None:
+    if len(frames) == 0:
+        raise ValueError("No frames to write")
+
+    ffmpeg_exe = shutil.which("ffmpeg") or shutil.which("ffmpeg.exe")
+    if ffmpeg_exe is None:
+        raise RuntimeError("ffmpeg executable not found in PATH")
+
+    height, width = frames[0].shape[:2]
+    cmd = [
+        ffmpeg_exe, "-y", "-f", "rawvideo", "-vcodec", "rawvideo",
+        "-pix_fmt", "rgb24", "-s", f"{width}x{height}", "-r", str(fps),
+        "-i", "-", "-an", "-vcodec", "libx264", "-pix_fmt", "yuv420p", out_path,
+    ]
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        for frm in frames:
+            arr = np.ascontiguousarray(frm)
+            if arr.ndim != 3 or arr.shape[2] not in (3, 4):
+                raise ValueError(f"Expected RGB/RGBA frame, got shape {arr.shape}")
+            if arr.shape[2] == 4:
+                arr = arr[:, :, :3]
+            if arr.dtype != np.uint8:
+                if np.issubdtype(arr.dtype, np.floating) and arr.max() <= 1.0:
+                    arr = (255 * np.clip(arr, 0.0, 1.0)).astype(np.uint8)
+                else:
+                    arr = arr.astype(np.uint8)
+            proc.stdin.write(arr.tobytes())
+    finally:
+        if proc.stdin is not None:
+            proc.stdin.close()
+        stderr = proc.stderr.read().decode("utf-8", errors="replace") if proc.stderr else ""
+        return_code = proc.wait()
+        if return_code != 0:
+            raise RuntimeError(f"ffmpeg failed with code {return_code}: {stderr.strip()}")
 
 # ---------------------------------------------------------------------------
 # Loading
 # ---------------------------------------------------------------------------
+
 
 def load_best(results_dir: str):
     """Load x_best.npy and f_best.npy from the results directory.
@@ -41,12 +84,15 @@ def load_best(results_dir: str):
     """
     # Find generation sub-folders
     subdirs = sorted(
-        int(n) for n in os.listdir(results_dir)
+        int(n)
+        for n in os.listdir(results_dir)
         if os.path.isdir(join(results_dir, n)) and n.isdigit()
     )
 
     def _load(fname):
-        for d in ([join(results_dir, str(max(subdirs)))] if subdirs else []) + [results_dir]:
+        for d in ([join(results_dir, str(max(subdirs)))] if subdirs else []) + [
+            results_dir
+        ]:
             p = join(d, fname)
             if os.path.isfile(p):
                 return np.load(p, allow_pickle=True)
@@ -66,7 +112,8 @@ def load_convergence(results_dir: str):
     Returns (gens, best_per_gen, mean_per_gen, std_per_gen).
     """
     subdirs = sorted(
-        int(n) for n in os.listdir(results_dir)
+        int(n)
+        for n in os.listdir(results_dir)
         if os.path.isdir(join(results_dir, n)) and n.isdigit()
     )
 
@@ -81,13 +128,13 @@ def load_convergence(results_dir: str):
         means.append(f.mean())
         stds.append(f.std())
 
-    return (np.array(gens), np.array(bests),
-            np.array(means), np.array(stds))
+    return (np.array(gens), np.array(bests), np.array(means), np.array(stds))
 
 
 # ---------------------------------------------------------------------------
 # Evaluate best individual on all three terrains
 # ---------------------------------------------------------------------------
+
 
 def evaluate_best(world, x_best: np.ndarray, n_episodes: int = 10):
     """Run x_best on flat, ice, and hill and return mean scores.
@@ -98,23 +145,15 @@ def evaluate_best(world, x_best: np.ndarray, n_episodes: int = 10):
 
     world.update_robot_xml(x_best)
 
-    terrain_map = {
-        "flat": ("FlatEnv-v0", world.flat_world_file),
-        "ice":  ("IceEnv-v0",  world.ice_world_file),
-        "hill": ("HillEnv-v0", world.hill_world_file),
-    }
-
-    def _neutral(info):
-        return (float(info.get("healthy_reward", 1.0))
-                + float(info.get("x_position",   0.0))
-                - float(info.get("ctrl_cost",     0.0))
-                - float(info.get("cfrc_cost",     0.0)))
+    terrains = ["flat", "ice", "hill"]
 
     results = {}
-    for terrain, (env_id, world_file) in terrain_map.items():
+    for terrain in terrains:
         print(f"  Evaluating on {terrain} ({n_episodes} episodes)...", flush=True)
-        env    = gym.make(env_id, robot_path=world_file, max_episode_steps=1000)
-        rng    = np.random.default_rng(0)
+        env_id = f"{terrain.capitalize()}Env-v0"
+        world_file = getattr(world, f"{terrain}_world_file")
+        env = world._make_env(env_id, world_file, max_episode_steps=1000)
+        rng = np.random.default_rng(0)
         scores = []
         for _ in range(n_episodes):
             world.controller.reset_controller(batch_size=1)
@@ -122,18 +161,18 @@ def evaluate_best(world, x_best: np.ndarray, n_episodes: int = 10):
             total, done = 0.0, False
             while not done:
                 action = world.controller.get_action(obs)
-                if action.ndim > 1:
-                    action = action.squeeze(0)
-                obs, _, terminated, truncated, info = env.step(action)
-                total += _neutral(info)
+                obs, reward, terminated, truncated, info = env.step(action)
+                total += float(reward)
                 done = terminated or truncated
             scores.append(total)
         env.close()
         results[terrain] = np.array(scores)
-        print(f"    mean={results[terrain].mean():.1f}  "
-              f"std={results[terrain].std():.1f}  "
-              f"min={results[terrain].min():.1f}  "
-              f"max={results[terrain].max():.1f}")
+        print(
+            f"    mean={results[terrain].mean():.1f}  "
+            f"std={results[terrain].std():.1f}  "
+            f"min={results[terrain].min():.1f}  "
+            f"max={results[terrain].max():.1f}"
+        )
 
     return results
 
@@ -141,6 +180,7 @@ def evaluate_best(world, x_best: np.ndarray, n_episodes: int = 10):
 # ---------------------------------------------------------------------------
 # Plots
 # ---------------------------------------------------------------------------
+
 
 def plot_convergence(gens, bests, means, stds, output_dir: str) -> None:
     if len(gens) == 0:
@@ -151,10 +191,11 @@ def plot_convergence(gens, bests, means, stds, output_dir: str) -> None:
 
     # Left: best and mean per generation with std band
     ax = axes[0]
-    ax.plot(gens, bests, color="gold",     linewidth=2, label="best (min-obj)")
+    ax.plot(gens, bests, color="gold", linewidth=2, label="best (min-obj)")
     ax.plot(gens, means, color="steelblue", linewidth=1.5, label="mean")
-    ax.fill_between(gens, means - stds, means + stds,
-                    color="steelblue", alpha=0.2, label="±1 std")
+    ax.fill_between(
+        gens, means - stds, means + stds, color="steelblue", alpha=0.2, label="±1 std"
+    )
     ax.set_xlabel("Generation")
     ax.set_ylabel("Min-objective score")
     ax.set_title("CMA-ES convergence")
@@ -178,24 +219,42 @@ def plot_convergence(gens, bests, means, stds, output_dir: str) -> None:
 def plot_terrain_scores(results: dict, output_dir: str) -> None:
     """Bar chart of mean ± std score per terrain."""
     terrains = list(results.keys())
-    means    = [results[t].mean() for t in terrains]
-    stds     = [results[t].std()  for t in terrains]
-    colours  = ["steelblue", "cyan", "green"]
+    means = [results[t].mean() for t in terrains]
+    stds = [results[t].std() for t in terrains]
+    colours = ["steelblue", "cyan", "green"]
 
     fig, ax = plt.subplots(figsize=(6, 5))
-    bars = ax.bar(terrains, means, yerr=stds, color=colours,
-                  capsize=6, alpha=0.85, edgecolor="black", linewidth=0.8)
+    bars = ax.bar(
+        terrains,
+        means,
+        yerr=stds,
+        color=colours,
+        capsize=6,
+        alpha=0.85,
+        edgecolor="black",
+        linewidth=0.8,
+    )
 
     # Annotate bars with mean value
     for bar, mean in zip(bars, means):
-        ax.text(bar.get_x() + bar.get_width() / 2,
-                bar.get_height() + max(stds) * 0.05,
-                f"{mean:.1f}", ha="center", va="bottom", fontsize=10)
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + max(stds) * 0.05,
+            f"{mean:.1f}",
+            ha="center",
+            va="bottom",
+            fontsize=10,
+        )
 
     # Draw a horizontal line at the min score — this is what was optimised
     min_score = min(means)
-    ax.axhline(min_score, color="red", linestyle="--", linewidth=1.2,
-               label=f"min = {min_score:.1f}  (CMA-ES objective)")
+    ax.axhline(
+        min_score,
+        color="red",
+        linestyle="--",
+        linewidth=1.2,
+        label=f"min = {min_score:.1f}  (CMA-ES objective)",
+    )
 
     ax.set_ylabel("Mean episode score")
     ax.set_title("Best CMA-ES individual — per-terrain performance")
@@ -212,11 +271,11 @@ def plot_episode_distribution(results: dict, output_dir: str) -> None:
     """Box plot showing score distribution across episodes per terrain."""
     fig, ax = plt.subplots(figsize=(6, 5))
 
-    data     = [results[t] for t in results]
-    labels   = list(results.keys())
-    colours  = ["steelblue", "cyan", "green"]
+    data = [results[t] for t in results]
+    labels = list(results.keys())
+    colours = ["steelblue", "cyan", "green"]
 
-    bp = ax.boxplot(data, labels=labels, patch_artist=True, notch=False)
+    bp = ax.boxplot(data, tick_labels=labels, patch_artist=True, notch=False)
     for patch, colour in zip(bp["boxes"], colours):
         patch.set_facecolor(colour)
         patch.set_alpha(0.7)
@@ -235,33 +294,26 @@ def plot_episode_distribution(results: dict, output_dir: str) -> None:
 # Video recording
 # ---------------------------------------------------------------------------
 
-def record_videos(world, x_best: np.ndarray, output_dir: str,
-                  max_steps: int = 1000) -> None:
-    import gymnasium as gym
 
-    try:
-        import imageio
-    except ImportError:
-        print("  imageio not installed — skipping videos. pip install imageio[ffmpeg]")
-        return
-
+def record_videos(
+    world, x_best: np.ndarray, output_dir: str, max_steps: int = 1000
+) -> None:
     world.update_robot_xml(x_best)
 
-    terrain_map = {
-        "flat": ("FlatEnv-v0", world.flat_world_file),
-        "ice":  ("IceEnv-v0",  world.ice_world_file),
-        "hill": ("HillEnv-v0", world.hill_world_file),
-    }
+    terrains = ["flat", "ice", "hill"]
 
-    for terrain, (env_id, world_file) in terrain_map.items():
+    for terrain in terrains:
+        env_id = f"{terrain.capitalize()}Env-v0"
+        world_file = getattr(world, f"{terrain}_world_file")
         out_path = join(output_dir, f"cmaes_best_{terrain}.mp4")
         print(f"  Recording on {terrain}...", flush=True)
         try:
-            env = gym.make(env_id, robot_path=world_file,
-                           render_mode="rgb_array", max_episode_steps=max_steps)
+            env = world._make_env(
+                env_id, world_file, render_mode="rgb_array", max_episode_steps=max_steps
+            )
             world.controller.reset_controller(batch_size=1)
             obs, _ = env.reset(seed=0)
-            frames  = []
+            frames = []
             total_r = 0.0
 
             for _ in range(max_steps):
@@ -275,9 +327,15 @@ def record_videos(world, x_best: np.ndarray, output_dir: str,
                     break
 
             env.close()
-            imageio.mimwrite(out_path, frames, fps=20)
-            print(f"    Saved: {out_path}  "
-                  f"(reward={total_r:.1f}, frames={len(frames)})")
+            if len(frames) == 0:
+                raise Exception("No frames captured")
+
+            _write_video(out_path, frames, fps=20)
+
+            print(
+                f"    Saved: {out_path}  "
+                f"(reward={total_r:.1f}, frames={len(frames)})"
+            )
         except Exception as exc:
             print(f"    Skipped ({terrain}): {exc}")
 
@@ -285,6 +343,7 @@ def record_videos(world, x_best: np.ndarray, output_dir: str,
 # ---------------------------------------------------------------------------
 # Console summary
 # ---------------------------------------------------------------------------
+
 
 def print_summary(results: dict, f_best_scalar: float) -> None:
     print("\n" + "=" * 55)
@@ -295,8 +354,10 @@ def print_summary(results: dict, f_best_scalar: float) -> None:
     print(f"  {'Terrain':<8} {'Mean':>8} {'Std':>8} {'Min':>8} {'Max':>8}")
     print("  " + "-" * 40)
     for terrain, scores in results.items():
-        print(f"  {terrain:<8} {scores.mean():8.1f} {scores.std():8.1f}"
-              f" {scores.min():8.1f} {scores.max():8.1f}")
+        print(
+            f"  {terrain:<8} {scores.mean():8.1f} {scores.std():8.1f}"
+            f" {scores.min():8.1f} {scores.max():8.1f}"
+        )
     print("=" * 55)
     means = [r.mean() for r in results.values()]
     print(f"  Generalist score (min of means): {min(means):.1f}")
@@ -308,18 +369,48 @@ def print_summary(results: dict, f_best_scalar: float) -> None:
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main():
     parser = argparse.ArgumentParser(description="Analyze CMA-ES results")
-    parser.add_argument("--results_dir", type=str,
-                        default="results/final_project_cmaes",
-                        help="Directory containing CMA-ES checkpoints")
-    parser.add_argument("--no_video", action="store_true",
-                        help="Skip video recording")
-    parser.add_argument("--output_dir", type=str,
-                        default="analysis_cmaes_output",
-                        help="Where to save plots and videos")
-    parser.add_argument("--n_episodes", type=int, default=10,
-                        help="Episodes per terrain for score bar chart")
+    parser.add_argument(
+        "--results_dir",
+        type=str,
+        default="results/final_project_cmaes",
+        help="Directory containing CMA-ES checkpoints",
+    )
+    parser.add_argument("--no_video", action="store_true", help="Skip video recording")
+    parser.add_argument(
+        "--output_dir",
+        type=str,
+        default="analysis_cmaes_output",
+        help="Where to save plots and videos",
+    )
+    parser.add_argument(
+        "--n_episodes",
+        type=int,
+        default=10,
+        help="Episodes per terrain for score bar chart",
+    )
+    parser.add_argument(
+        "--directional",
+        action="store_true",
+        help="Must match the setting used during training",
+    )
+    parser.add_argument(
+        "--target_direction",
+        type=float,
+        nargs=2,
+        default=(1.0, 0.0),
+        metavar=("DX", "DY"),
+        help="Direction used during training (if --directional was set)",
+    )
+    parser.add_argument(
+        "--leg_layout",
+        type=str,
+        choices=["quadruped", "hexapod"],
+        default="quadruped",
+        help="Must match the layout used during training",
+    )
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -336,13 +427,18 @@ def main():
     print("\nEvaluating best individual on all terrains...")
     try:
         from final_project_train import FinalWorld
-        world   = FinalWorld()
+
+        world = FinalWorld(
+            directional=args.directional,
+            target_direction=tuple(args.target_direction),
+            leg_layout=args.leg_layout,
+        )
         results = evaluate_best(world, x_best, n_episodes=args.n_episodes)
         has_world = True
     except ImportError as e:
         print(f"  Could not import FinalWorld: {e}")
         print("  Skipping evaluation and videos — run from project root.")
-        results   = {}
+        results = {}
         has_world = False
 
     # ------------------------------------------------------------------
