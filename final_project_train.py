@@ -336,10 +336,12 @@ class FinalWorld(World):
             rewards[t, ~done] = r[~done]
             done |= terminated | truncated
 
-            # Terminate early if the robot is stuck (Step 100 instead of 200)
-            if t == 100:
+            # Terminate early if the robot is stuck (Step 150 instead of 200)
+            if t == 150:                          # give more time before checking
                 x_pos = info_dict.get("x_position", np.zeros(n_repeats))
-                stuck = x_pos < 0.1  # less than 10 cm in 100 steps = stuck
+                if isinstance(x_pos, (int, float)): # Handles any potential error with dictionary info return type
+                    x_pos = np.full(n_repeats, x_pos)
+                stuck = np.array(x_pos) < 0.05   # 5cm in 150 steps — only catch truly static robots
                 done |= stuck
 
             if done.all():
@@ -348,13 +350,13 @@ class FinalWorld(World):
         envs.close()
         return float(rewards.sum(axis=0).mean())
 
-    def _eval_flat(self, n_repeats: int = 3, n_steps: int = 400) -> float:
+    def _eval_flat(self, n_repeats: int = 2, n_steps: int = 300) -> float:
         return self._run_env("FlatEnv-v0", self.flat_world_file, n_repeats, n_steps)
 
-    def _eval_ice(self, n_repeats: int = 3, n_steps: int = 400) -> float:
+    def _eval_ice(self, n_repeats: int = 2, n_steps: int = 300) -> float:
         return self._run_env("IceEnv-v0", self.ice_world_file, n_repeats, n_steps)
 
-    def _eval_hill(self, n_repeats: int = 3, n_steps: int = 400) -> float:
+    def _eval_hill(self, n_repeats: int = 2, n_steps: int = 300) -> float:
         return self._run_env("HillEnv-v0", self.hill_world_file, n_repeats, n_steps)
 
     def create_env(self, render_mode: str = "rgb_array", **kwargs):
@@ -818,12 +820,12 @@ if __name__ == "__main__":
             run_cmaes_refinement(
                 seed_genotype=None,  # cold start
                 num_generations=300,  # more generations since I noted it was still improving
-                population_size=96,  # Increased to better explore
+                population_size=32,   # was 96 — CMA-ES doesn't need large populations
                 sigma=0.5,
                 bounds=(-1, 1),
-                n_repeats=3,  # balance between speed and noise
-                n_steps=500,
-                ckpt_interval=10,
+                n_repeats=2,  # balance between speed and noise
+                n_steps=300,
+                ckpt_interval=5,
             )
     else:
         run_multi_task_evolution(

@@ -222,7 +222,7 @@ class CPGController(Controller):
         hidden = np.tanh(obs @ self._W1.T)              # (B, hidden)
         out    = hidden @ self._W2.T                    # (B, 2*J)
 
-        gain      = _sigmoid(out[:, :self.n_joints])    # (B, J) ∈ (0,1)
+        gain = 2.0 * _sigmoid(out[:, :self.n_joints]) - 1.0   # centered sigmoid: (-1, 1) — zero at w=0
         freq_mod  = np.tanh(out[:, self.n_joints:]) * self.max_dfreq  # (B, J)
 
         # ------------------------------------------------------------------

@@ -84,6 +84,7 @@ class EvalIceEnv(MujocoEnv, utils.EzPickle):
 
         forward_bonus = max(x_velocity, 0) * 5.0
         still_penalty = -2.0 if x_velocity < 0.05 else 0   # stronger than before
+        y_displacement_penalty = -abs(y_after) * 1.0    # penalise absolute lateral drift from centre
         lateral_penalty = -y_drift * 2.0                      # penalise sideways movement
         backward_penalty = -abs(min(x_velocity, 0)) * 3.0     # explicit backward penalty
 
@@ -94,6 +95,7 @@ class EvalIceEnv(MujocoEnv, utils.EzPickle):
                 + forward_bonus
                 + still_penalty
                 + lateral_penalty
+                + y_displacement_penalty
                 + backward_penalty
                 + heading_reward
                 - ctrl_cost * 0.1
@@ -113,10 +115,12 @@ class EvalIceEnv(MujocoEnv, utils.EzPickle):
 
     def _is_terminated(self) -> bool:
         z = float(self.data.qpos[2])
+        y = float(self.data.qpos[1])
         return (
             not np.isfinite(self.state_vector()).all()
             or z < 0.2
             or z > 1.0
+            or abs(y) > 2.0    # terminate if drifted more than 2m sideways
         )
 
     def _get_obs(self):

@@ -86,6 +86,7 @@ class EvalHillEnv(MujocoEnv, utils.EzPickle):
         forward_bonus = max(x_position - self._prev_x, 0) * 5.0
         still_penalty = -2.0 if (x_position - self._prev_x) < 0.001 else 0
         lateral_penalty = -abs(y_after - y_before) / self.dt * 2.0
+        y_displacement_penalty = -abs(y_after) * 1.0    # penalise absolute lateral drift from centre
         backward_penalty = -abs(min(x_velocity, 0)) * 3.0
 
         # Heading: reward torso facing +x
@@ -96,6 +97,7 @@ class EvalHillEnv(MujocoEnv, utils.EzPickle):
                 + forward_bonus
                 + still_penalty
                 + lateral_penalty
+                + y_displacement_penalty
                 + backward_penalty
                 + heading_reward
                 - ctrl_cost * 0.1
