@@ -104,23 +104,11 @@ class EvalEnv(MujocoEnv, utils.EzPickle):
         return bool(np.any(np.isnan(qacc) | np.isinf(qacc) | (np.abs(qacc) > 1e6)))
 
     def _get_obs(self):
-        # Base proprioception (joint angles + velocities) - Skip root xy (first 2 qpos elements) to keep observations translation-invariant
-        base = np.concatenate((self.data.qpos.flat[2:], self.data.qvel.flat.copy()))
-        
-        # Terrain-discriminative signals
-        # 1. Contact forces per foot — tells robot which feet are slipping (ice)
-        #    or on uneven ground (hill). cfrc_ext shape: (nbody, 6)
-        foot_contacts = self.data.cfrc_ext[1:].sum(axis=1)   # (nbody-1,) — net force per body
-        foot_contacts = np.clip(foot_contacts / 100.0, -1, 1) # normalise
-        
-        # 2. Torso tilt (roll + pitch) — critical for hill detection
+        base = np.concatenate((self.data.qpos.flat[2:], self.data.qvel.flat.copy()))  # 27
         R = self.data.body(1).xmat.reshape(3, 3)
-        tilt = R[2, :2]   # z-column x and y components — 0 when upright, nonzero when tilted
-        
-        # 3. x and y velocity of torso — slip detection for ice
-        torso_vel = self.data.qvel.flat[:3].copy()   # vx, vy, vz
-        
-        return np.concatenate([base, foot_contacts, tilt, torso_vel])
+        tilt = R[2, :2]                          # 2 — most terrain-discriminative signal
+        torso_vel = self.data.qvel.flat[:3].copy()  # 3 — slip detection
+        return np.concatenate([base, tilt, torso_vel])  # 32-dim instead of 49
 
     def reset_model(self):
         noise = self._reset_noise_scale

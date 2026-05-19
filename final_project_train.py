@@ -89,7 +89,7 @@ class FinalWorld(World):
         #              Whatever you choose determines self.n_weights (controller parameter count).
         # ------------------------------------------------------------------
         self.controller = CPGController(
-            input_size=49,
+            input_size=32,
             output_size=8,
             hidden_size=4,  # Reduced from 8 to shrink search space (~200 params total)
             base_freq=2 * np.pi,
@@ -163,12 +163,19 @@ class FinalWorld(World):
             front-left  = front-right  (bilateral symmetry)
             back-left   = back-right
 
-        Segment length mapping: (g + 1) / 4 + 0.1  →  [0.1, 0.6] m
+        Segment length mapping: 
+        Maps EA bounds [-3, 3] linearly to physical lengths [0.1, 0.8] meters.
+        Standard Ant is ~0.28m (upper) and ~0.56m (lower).
         """
         control_params = genotype[
             : self.n_weights
         ]  # full scale — let CPG produce real actions
-        body_raw = (genotype[self.n_weights :] + 1) / 4 + 0.1
+        
+        # CORRECTED MAPPING:
+        # (g + 3) / 6 normalizes the [-3, 3] range to [0, 1]
+        # Multiplying by 0.7 and adding 0.1 scales it to [0.1, 0.8] meters
+        body_raw = 0.1 + ((genotype[self.n_weights :] + 3.0) / 6.0) * 0.7
+        
         self.controller.geno2pheno(control_params)
 
         if N_BODY_PARAMS == 2:
@@ -205,18 +212,10 @@ class FinalWorld(World):
 
         points = np.vstack(
             [
-                fl_h,
-                fl_k,
-                fl_t,
-                fr_h,
-                fr_k,
-                fr_t,
-                bl_h,
-                bl_k,
-                bl_t,
-                br_h,
-                br_k,
-                br_t,
+                fl_h, fl_k, fl_t,
+                fr_h, fr_k, fr_t,
+                bl_h, bl_k, bl_t,
+                br_h, br_k, br_t,
             ]
         )
 
