@@ -163,19 +163,19 @@ class FinalWorld(World):
             front-left  = front-right  (bilateral symmetry)
             back-left   = back-right
 
-        Segment length mapping: 
-        Maps EA bounds [-3, 3] linearly to physical lengths [0.1, 0.8] meters.
-        Standard Ant is ~0.28m (upper) and ~0.56m (lower).
+        Segment length mapping:
+        Maps EA bounds [-1, 1] linearly to physical lengths [0.1, 0.6] meters.
+        Standard Ant is ~0.28m (upper) and ~0.56m (lower); using a narrower upper bound
+        avoids producing extremely tall legs that may violate the environment's healthy z-range.
         """
         control_params = genotype[
             : self.n_weights
         ]  # full scale — let CPG produce real actions
-        
-        # CORRECTED MAPPING:
-        # (g + 3) / 6 normalizes the [-3, 3] range to [0, 1]
-        # Multiplying by 0.7 and adding 0.1 scales it to [0.1, 0.8] meters
-        body_raw = 0.1 + ((genotype[self.n_weights :] + 3.0) / 6.0) * 0.7
-        
+
+        # MAPPING FOR BOUNDS [-1, 1]:
+        # should be (0.2, 0.7)
+        body_raw = 0.2 + (genotype[self.n_weights :] + 1) / 4  # scale to [0.2, 0.7] m
+
         self.controller.geno2pheno(control_params)
 
         if N_BODY_PARAMS == 2:
@@ -212,10 +212,18 @@ class FinalWorld(World):
 
         points = np.vstack(
             [
-                fl_h, fl_k, fl_t,
-                fr_h, fr_k, fr_t,
-                bl_h, bl_k, bl_t,
-                br_h, br_k, br_t,
+                fl_h,
+                fl_k,
+                fl_t,
+                fr_h,
+                fr_k,
+                fr_t,
+                bl_h,
+                bl_k,
+                bl_t,
+                br_h,
+                br_k,
+                br_t,
             ]
         )
 
@@ -595,9 +603,9 @@ def run_multi_task_evolution(
     mutation_prob: float = 0.3,
     crossover_prob: float = 0.5,
     bounds: tuple = (
-        -3,
-        3,
-    ),  # Wider than 1 to let EA find gaits that actually produce motion, rather than converging immediately to the zero-action basin.
+        -1,
+        1,
+    ),  # Use (-1,1) matching Gymnasium/MuJoCo Ant action/morphology scale recommendations.
     ckpt_interval: int = 10,
     results_dir: str = None,
     random_seed: int = 42,
@@ -692,11 +700,11 @@ def run_multi_task_evolution(
 
 
 def run_cmaes_refinement(
-    seed_genotype: np.ndarray = None,   # make optional
+    seed_genotype: np.ndarray = None,  # make optional
     num_generations: int = 100,
     population_size: int = 32,
     sigma: float = 0.5,  # was 0.2 — larger for cold start exploration
-    bounds: tuple = (-3, 3),            # match NSGA-II bounds
+    bounds: tuple = (-1, 1),  # match NSGA-II bounds (Gymnasium recommends [-1,1])
     n_repeats: int = 4,
     n_steps: int = 500,
     ckpt_interval: int = 10,
@@ -808,12 +816,12 @@ if __name__ == "__main__":
             )
         else:
             run_cmaes_refinement(
-                seed_genotype=None,       # cold start
-                num_generations=300,      # more generations since I noted it was still improving
+                seed_genotype=None,  # cold start
+                num_generations=300,  # more generations since I noted it was still improving
                 population_size=96,  # Increased to better explore
                 sigma=0.5,
-                bounds=(-3, 3),
-                n_repeats=3,              # balance between speed and noise
+                bounds=(-1, 1),
+                n_repeats=3,  # balance between speed and noise
                 n_steps=500,
                 ckpt_interval=10,
             )
@@ -821,11 +829,11 @@ if __name__ == "__main__":
         run_multi_task_evolution(
             num_generations=200,
             population_size=96,  # Increased to better explore Pareto front
-            n_parents=48, # 50% selection pressure
+            n_parents=48,  # 50% selection pressure
             n_repeats=2,  # Use 1 repeat during training for speed
             n_steps=400,  # 400 steps is enough to evaluate speed
-            mutation_prob=0.5,      # was 0.3 — more exploration to find hill gait
-            crossover_prob=0.3,     # was 0.5 — less crossover, more mutation for diversity
+            mutation_prob=0.5,  # was 0.3 — more exploration to find hill gait
+            crossover_prob=0.3,  # was 0.5 — less crossover, more mutation for diversity
             ckpt_interval=5,  # Save less often to reduce disk I/O
             results_dir=args.results_dir or join(ROOT_DIR, "results", "final_test"),
         )
