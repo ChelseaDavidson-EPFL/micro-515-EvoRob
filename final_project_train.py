@@ -820,7 +820,7 @@ if __name__ == "__main__":
                 num_generations=300,  # more generations since I noted it was still improving
                 population_size=96,  # Increased to better explore
                 sigma=0.5,
-                bounds=(-3, 3),
+                bounds=(-1, 1),
                 n_repeats=3,  # balance between speed and noise
                 n_steps=500,
                 ckpt_interval=10,
