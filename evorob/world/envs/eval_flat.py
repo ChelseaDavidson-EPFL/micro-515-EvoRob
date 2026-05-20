@@ -81,14 +81,14 @@ class EvalFlatEnv(MujocoEnv, utils.EzPickle):
         cfrc_cost = float(np.sum(self.data.cfrc_ext[1:] ** 2) * self._cfrc_cost_weight)
         terminated = self._is_terminated()
 
-        forward_bonus  = max(x_velocity, 0) * 5.0
-        still_penalty  = -2.0 if x_velocity < 0.05 else 0   # stronger than before
-        y_displacement_penalty = -abs(y_after) * 1.0    # penalise absolute lateral drift from centre
-        lateral_penalty = -y_drift * 2.0                      # penalise sideways movement
+        forward_bonus  = max(x_velocity, 0) * 10.0
+        still_penalty  = -5.0 if x_velocity < 0.1 else 0   # Penalize standing still more aggressively
+        y_displacement_penalty = -abs(y_after) * 3.0   # penalise absolute lateral drift from centre
+        lateral_penalty = -y_drift * 5.0                     # penalise sideways movement
         backward_penalty = -abs(min(x_velocity, 0)) * 3.0     # explicit backward penalty
 
         R = self.data.body(1).xmat.reshape(3, 3)
-        heading_reward = float(R[:, 0][0]) * 2.0
+        heading_reward = float(R[:, 0][0]) * 0.5
 
         reward = (healthy_reward
                 + forward_bonus

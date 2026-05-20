@@ -63,7 +63,7 @@ MAX_EPISODE_STEPS = 1000  # fixed for leaderboard — do not change
 #   4  →  [upper_front, lower_front, upper_back, lower_back]  (more expressive)
 #   8  →  original per-segment encoding
 # ---------------------------------------------------------------------------
-N_BODY_PARAMS = 4  # ← change to 4 for the second phase
+N_BODY_PARAMS = 2  # ← change to 4 for the second phase
 
 
 # ---------------------------------------------------------------------------
@@ -341,7 +341,8 @@ class FinalWorld(World):
                 x_pos = info_dict.get("x_position", np.zeros(n_repeats))
                 if isinstance(x_pos, (int, float)): # Handles any potential error with dictionary info return type
                     x_pos = np.full(n_repeats, x_pos)
-                stuck = np.array(x_pos) < 0.05   # 5cm in 150 steps — only catch truly static robots
+                # Require the robot to have moved at least 50cm by step 150
+                stuck = np.array(x_pos) < 0.50
                 done |= stuck
 
             if done.all():
