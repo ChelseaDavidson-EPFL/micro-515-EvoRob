@@ -820,7 +820,7 @@ if __name__ == "__main__":
         else:
             run_cmaes_refinement(
                 seed_genotype=None,  # cold start
-                num_generations=300,  # more generations since I noted it was still improving
+                num_generations=600,  # more generations since I noted it was still improving
                 population_size=32,   # was 96 — CMA-ES doesn't need large populations
                 sigma=0.5,
                 bounds=(-1, 1),
