@@ -82,18 +82,20 @@ class EvalIceEnv(MujocoEnv, utils.EzPickle):
         cfrc_cost = float(np.sum(self.data.cfrc_ext[1:] ** 2) * self._cfrc_cost_weight)
         terminated = self._is_terminated()
 
-        forward_bonus = max(x_velocity, 0) * 5.0
-        still_penalty = -2.0 if x_velocity < 0.05 else 0   # stronger than before
-        lateral_penalty = -y_drift * 2.0                      # penalise sideways movement
+        forward_bonus  = max(x_velocity, 0) * 10.0
+        still_penalty  = -5.0 if x_velocity < 0.1 else 0   # stronger than before
+        y_displacement_penalty = -abs(y_after) * 3.0    # penalise absolute lateral drift from centre
+        lateral_penalty = -y_drift * 5.0                     # penalise sideways movement
         backward_penalty = -abs(min(x_velocity, 0)) * 3.0     # explicit backward penalty
 
         R = self.data.body(1).xmat.reshape(3, 3)
-        heading_reward = float(R[:, 0][0]) * 2.0
+        heading_reward = float(R[:, 0][0]) * 0.5
 
         reward = (healthy_reward
                 + forward_bonus
                 + still_penalty
                 + lateral_penalty
+                + y_displacement_penalty
                 + backward_penalty
                 + heading_reward
                 - ctrl_cost * 0.1
@@ -113,10 +115,14 @@ class EvalIceEnv(MujocoEnv, utils.EzPickle):
 
     def _is_terminated(self) -> bool:
         z = float(self.data.qpos[2])
+        y = float(self.data.qpos[1])
+        R = self.data.body(1).xmat.reshape(3, 3)
         return (
             not np.isfinite(self.state_vector()).all()
+            or float(R[2, 2]) < 0.5  # Kill episode if tilted > 60 degrees, R[2,2] is the cosine of the robot's overall tilt angle
             or z < 0.2
             or z > 1.0
+            or abs(y) > 2.0    # terminate if drifted more than 2m sideways
         )
 
     def _get_obs(self):

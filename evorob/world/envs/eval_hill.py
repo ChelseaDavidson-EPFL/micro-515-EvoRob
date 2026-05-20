@@ -82,20 +82,28 @@ class EvalHillEnv(MujocoEnv, utils.EzPickle):
         cfrc_cost = float(np.sum(self.data.cfrc_ext[1:] ** 2) * self._cfrc_cost_weight)
         terminated = self._is_terminated(xyz_velocity)
 
-        # Forward progress since last step
-        forward_bonus = max(x_position - self._prev_x, 0) * 5.0
-        still_penalty = -2.0 if (x_position - self._prev_x) < 0.001 else 0
-        lateral_penalty = -abs(y_after - y_before) / self.dt * 2.0
+        # Forward and Upward progress since last step
+        forward_bonus  = max(x_velocity, 0) * 10.0
+        
+        # Massive reward purely for fighting gravity and gaining height
+        z_velocity = float(xyz_velocity[2])
+        z_elevation_bonus = max(z_velocity, 0) * 20.0 
+
+        still_penalty  = -5.0 if x_velocity < 0.1 else 0
+        lateral_penalty = -(abs(y_after - y_before) / self.dt) * 5.0
+        y_displacement_penalty = -abs(y_after) * 3.0    # penalise absolute lateral drift from centre
         backward_penalty = -abs(min(x_velocity, 0)) * 3.0
 
         # Heading: reward torso facing +x
         R = self.data.body(1).xmat.reshape(3, 3)
-        heading_reward = float(R[:, 0][0]) * 2.0
+        heading_reward = float(R[:, 0][0]) * 0.5
 
         reward = (healthy_reward
                 + forward_bonus
+                + z_elevation_bonus
                 + still_penalty
                 + lateral_penalty
+                + y_displacement_penalty
                 + backward_penalty
                 + heading_reward
                 - ctrl_cost * 0.1
@@ -131,7 +139,7 @@ class EvalHillEnv(MujocoEnv, utils.EzPickle):
 
     def _torso_upside_down(self) -> bool:
         R = self.data.body(1).xmat.reshape(3, 3)
-        return float(R[2, 2]) < 0.1   # was 0.0 — terminate earlier before fully flipped
+        return float(R[2, 2]) < 0.5  # Kill episode if tilted > 60 degrees, R[2,2] is the cosine of the robot's overall tilt angle
 
     def _get_obs(self):
         base = np.concatenate((self.data.qpos.flat[2:], self.data.qvel.flat.copy()))  # 27
