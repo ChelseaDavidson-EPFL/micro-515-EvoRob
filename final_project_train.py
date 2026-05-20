@@ -806,19 +806,20 @@ if __name__ == "__main__":
             seed = np.load(seed_path)
             run_cmaes_refinement(
                 seed_genotype=seed,
-                num_generations=300,
-                population_size=96,
+                num_generations=600,
+                population_size=32,
                 sigma=0.2,
+                bounds=(-1, 1),
                 n_repeats=2,
-                n_steps=200,
+                n_steps=300,
                 ckpt_interval=5,
                 results_dir=args.results_dir,
             )
         else:
             run_cmaes_refinement(
                 seed_genotype=None,  # cold start
-                num_generations=300,  # more generations since I noted it was still improving
-                population_size=96,  # Increased to better explore
+                num_generations=600,  # more generations since I noted it was still improving
+                population_size=32,  # Increased to better explore
                 sigma=0.5,
                 bounds=(-1, 1),
                 n_repeats=3,  # balance between speed and noise

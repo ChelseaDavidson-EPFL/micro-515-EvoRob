@@ -82,28 +82,25 @@ class EvalHillEnv(MujocoEnv, utils.EzPickle):
         cfrc_cost = float(np.sum(self.data.cfrc_ext[1:] ** 2) * self._cfrc_cost_weight)
         terminated = self._is_terminated(xyz_velocity)
 
-        # Forward and Upward progress since last step
-        forward_bonus  = max(x_velocity, 0) * 10.0
-        
+        # Forward progress since last step
+        forward_bonus = max(x_position - self._prev_x, 0) * 5.0
+
         # Massive reward purely for fighting gravity and gaining height
         z_velocity = float(xyz_velocity[2])
-        z_elevation_bonus = max(z_velocity, 0) * 20.0 
-
-        still_penalty  = -5.0 if x_velocity < 0.1 else 0
-        lateral_penalty = -(abs(y_after - y_before) / self.dt) * 5.0
-        y_displacement_penalty = -abs(y_after) * 3.0    # penalise absolute lateral drift from centre
+        z_elevation_bonus = max(z_velocity, 0) * 10.0 
+        still_penalty = -2.0 if (x_position - self._prev_x) < 0.001 else 0
+        lateral_penalty = -abs(y_after - y_before) / self.dt * 2.0
         backward_penalty = -abs(min(x_velocity, 0)) * 3.0
 
         # Heading: reward torso facing +x
         R = self.data.body(1).xmat.reshape(3, 3)
-        heading_reward = float(R[:, 0][0]) * 0.5
+        heading_reward = float(R[:, 0][0]) * 2.0
 
         reward = (healthy_reward
                 + forward_bonus
                 + z_elevation_bonus
                 + still_penalty
                 + lateral_penalty
-                + y_displacement_penalty
                 + backward_penalty
                 + heading_reward
                 - ctrl_cost * 0.1
