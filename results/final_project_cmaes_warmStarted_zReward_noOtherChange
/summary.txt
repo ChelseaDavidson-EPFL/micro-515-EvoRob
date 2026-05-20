@@ -1,0 +1,5 @@
+Commit: reverted back to old reward functions but still added z rewards
+
+Notes about observed behaviour during training:
+- moving laterally 
+- Making long legs

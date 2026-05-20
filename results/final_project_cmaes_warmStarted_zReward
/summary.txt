@@ -1,0 +1,18 @@
+Changed reward balancing to what's on main, added termination for lateral drift and body pitching, added large z reward to hill
+SIGMA = 0.5!!!!
+
+if args.seed_path is not None:
+            seed_path = args.seed_path
+            print(f"Loading seed from: {seed_path}")
+            seed = np.load(seed_path)
+            run_cmaes_refinement(
+                seed_genotype=seed,
+                num_generations=600,
+                population_size=32,
+                sigma=0.5,
+                bounds=(-1, 1),
+                n_repeats=2,
+                n_steps=300,
+                ckpt_interval=5,
+                results_dir=args.results_dir,
+            )

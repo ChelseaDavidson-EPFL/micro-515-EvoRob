@@ -449,7 +449,6 @@ def print_summary(results: dict, f_best_scalar: float) -> None:
 # Main
 # ---------------------------------------------------------------------------
 
-
 def main():
     parser = argparse.ArgumentParser(description="Analyze CMA-ES results")
     parser.add_argument(
@@ -462,7 +461,7 @@ def main():
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="analysis_cmaes_output",
+        default="analysis_cmaes_output/warmStarted_zReward",
         help="Where to save plots and videos",
     )
     parser.add_argument(
