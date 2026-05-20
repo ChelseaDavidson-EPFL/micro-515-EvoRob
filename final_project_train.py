@@ -91,7 +91,7 @@ class FinalWorld(World):
         self.controller = CPGController(
             input_size=32,
             output_size=8,
-            hidden_size=4,  # Reduced from 8 to shrink search space (~200 params total)
+            hidden_size=8,  # Increased back to 8 (~200 params total)
             base_freq=2 * np.pi,
             max_dfreq=np.pi,
             dt=0.05,
