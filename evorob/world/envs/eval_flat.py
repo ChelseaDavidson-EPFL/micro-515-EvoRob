@@ -115,8 +115,10 @@ class EvalFlatEnv(MujocoEnv, utils.EzPickle):
     def _is_terminated(self) -> bool:
         z = float(self.data.qpos[2])
         y = float(self.data.qpos[1])
+        R = self.data.body(1).xmat.reshape(3, 3)
         return (
             not np.isfinite(self.state_vector()).all()
+            or float(R[2, 2]) < 0.5  # Kill episode if tilted > 60 degrees, R[2,2] is the cosine of the robot's overall tilt angle.
             or z < 0.2
             or z > 1.0
             or abs(y) > 2.0    # terminate if drifted more than 2m sideways

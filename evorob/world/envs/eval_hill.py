@@ -139,7 +139,7 @@ class EvalHillEnv(MujocoEnv, utils.EzPickle):
 
     def _torso_upside_down(self) -> bool:
         R = self.data.body(1).xmat.reshape(3, 3)
-        return float(R[2, 2]) < 0.5  # Kill episode if tilted > 60 degrees
+        return float(R[2, 2]) < 0.5  # Kill episode if tilted > 60 degrees, R[2,2] is the cosine of the robot's overall tilt angle
 
     def _get_obs(self):
         base = np.concatenate((self.data.qpos.flat[2:], self.data.qvel.flat.copy()))  # 27
