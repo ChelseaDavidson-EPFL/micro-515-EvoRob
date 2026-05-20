@@ -68,9 +68,11 @@ class EvalEnv(MujocoEnv, utils.EzPickle):
         }
 
         # Observation: qpos (skip root xy) + qvel — dimensions inferred from model
-        obs_size = (self.data.qpos.size - 2) + self.data.qvel.size
         self.observation_space = Box(
-            low=-np.inf, high=np.inf, shape=(obs_size,), dtype=np.float64
+            low=-np.inf,
+            high=np.inf,
+            shape=self._get_obs().shape,
+            dtype=np.float64,
         )
 
     def step(self, action):

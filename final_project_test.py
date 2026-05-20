@@ -49,6 +49,8 @@ import evorob.world          # registers EvalEnv-v0
 import gymnasium as gym
 
 from evorob.world.eval_world import EvalWorld
+from evorob.world.robot.controllers.cpg import CPGController
+
 
 # ===========================================================================
 # STUDENT CONFIGURATION — edit this section
@@ -64,11 +66,19 @@ from evorob.world.eval_world import EvalWorld
 # from evorob.world.robot.controllers.so2 import SO2Controller
 # MY_CONTROLLER = SO2Controller(input_size=27, output_size=8, hidden_size=8)
 
-MY_CONTROLLER = None
+MY_CONTROLLER = CPGController(
+            input_size=32,
+            output_size=8,
+            hidden_size=4,  # Reduced from 8 to shrink search space (~200 params total)
+            base_freq=2 * np.pi,
+            max_dfreq=np.pi,
+            dt=0.05,
+            inter_con_density=0.5,
+        )
 
 # --- Paths ---
 # Option A: directory that contains x_best.npy (recommended)
-CHECKPOINT_DIR = "results/final_project"
+CHECKPOINT_DIR = "results/final_project_cmaes"
 
 # Option B: provide the robot XML and genotype as separate files
 ROBOT_XML_PATH = None   # e.g. "/abs/path/to/Robot.xml"
