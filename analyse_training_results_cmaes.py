@@ -481,6 +481,10 @@ def main():
     x_best, f_best_scalar = load_best(args.results_dir)
     gens, bests, means, stds = load_convergence(args.results_dir)
 
+    # Save the analyzed genotype to the output directory for easy access
+    np.save(join(args.output_dir, "x_best.npy"), x_best)
+    print(f"  Genotype saved to: {join(args.output_dir, 'x_best.npy')}")
+
     # ------------------------------------------------------------------
     # Evaluate on all terrains
     # ------------------------------------------------------------------
@@ -490,6 +494,13 @@ def main():
 
         world = FinalWorld()
         results = evaluate_best(world, x_best, n_episodes=args.n_episodes)
+
+        # Save the Robot XML generated during evaluation
+        robot_xml_path = join(world.temp_dir.name, "Robot.xml")
+        if os.path.exists(robot_xml_path):
+            shutil.copy2(robot_xml_path, join(args.output_dir, "Robot.xml"))
+            print(f"  Robot XML saved to: {join(args.output_dir, 'Robot.xml')}")
+
         has_world = True
     except ImportError as e:
         print(f"  Could not import FinalWorld: {e}")

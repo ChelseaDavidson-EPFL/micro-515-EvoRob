@@ -24,10 +24,20 @@ def main():
         choices=["FlatEnv-v0", "IceEnv-v0", "HillEnv-v0"],
     )
     parser.add_argument(
-        "--checkpoint", type=str, default="results/final_project_cmaes/x_best.npy"
+        "--checkpoint",
+        type=str,
+        default=None,
+        help="Path to the genotype .npy file. Defaults to analysis_cmaes_output/x_best.npy if found.",
     )
     parser.add_argument("--step_ms", type=int, default=20)
     args = parser.parse_args()
+
+    # Prioritize the "better" checkpoint from the analysis folder if it exists
+    if args.checkpoint is None:
+        if os.path.exists("analysis_cmaes_output/x_best.npy"):
+            args.checkpoint = "analysis_cmaes_output/x_best.npy"
+        else:
+            args.checkpoint = "results/final_project_cmaes/x_best.npy"
 
     world = FinalWorld()
 
