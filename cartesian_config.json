@@ -1,0 +1,14 @@
+{
+    "speed": 0.65,
+    "stride_length": 1.0,
+    "step_height": 0.29,
+    "ground_level": 1.22,
+    "duty_cycle": 0.25,
+    "leg_phase": 3.14,
+    "avg_window": 239.04,
+    "turn_offset": 0.01,
+    "kp_heading": 1.0,
+    "k_hip": 0.54,
+    "k_knee": 0.48,
+    "leg_shift": 0
+}

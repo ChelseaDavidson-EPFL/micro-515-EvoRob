@@ -2,22 +2,22 @@
 MICRO-515 Final Project — Evaluation Results
 ============================================================
 
-Controller : NeuralNetworkController  (280 params)
-Genotype   : 288 params  (controller=280, body=8)
+Controller : CPGController  (230 params)
+Genotype   : 238 params  (controller=230, body=4)
 Reward     : healthy_reward + x_position - ctrl_cost - cfrc_cost
 
-Mean  : 3184.55
-Std   : 12011.62
-Best  : 34318.55
-Worst : -12167.64
+Mean  : 3954.22
+Std   : 263.49
+Best  : 4300.61
+Worst : 3528.57
 
-Episode   1:    -151.88
-Episode   2:   -4410.64
-Episode   3:   -2614.19
-Episode   4:    -904.16
-Episode   5:      56.85
-Episode   6:    8258.99
-Episode   7:  -12167.64
-Episode   8:   34318.55
-Episode   9:   -1527.40
-Episode  10:   10986.97
+Episode   1:    3590.35
+Episode   2:    3786.46
+Episode   3:    4188.59
+Episode   4:    4096.38
+Episode   5:    4300.61
+Episode   6:    4117.43
+Episode   7:    3706.15
+Episode   8:    4018.23
+Episode   9:    4209.44
+Episode  10:    3528.57

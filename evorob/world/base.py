@@ -12,11 +12,13 @@ class World(ABC):
     controller: Controller
 
     @abstractmethod
-    def create_env(self, render_mode: str = 'rgb_array', **kwargs) -> SyncVectorEnv|Env:
+    def create_env(
+        self, render_mode: str = "rgb_array", **kwargs
+    ) -> SyncVectorEnv | Env:
         raise NotImplementedError
 
     @abstractmethod
-    def evaluate_individual(self, genotype) -> float|np.ndarray:
+    def evaluate_individual(self, genotype) -> float | np.ndarray:
         raise NotImplementedError
 
     @abstractmethod
@@ -26,7 +28,13 @@ class World(ABC):
     def update_robot_xml(self, genotype: np.ndarray):
         raise NotImplementedError
 
-    def generate_best_individual_video(self, env, video_name: str, controller: Controller|None = None, n_steps: int = 1000):
+    def generate_best_individual_video(
+        self,
+        env,
+        video_name: str,
+        controller: Controller | None = None,
+        n_steps: int = 1000,
+    ):
         if controller is None:
             controller = self.controller
         rewards_list = []
@@ -35,7 +43,8 @@ class World(ABC):
         frames = []
         for _ in range(n_steps):
             image = env.render()
-            frames.append(image[0] if isinstance(image, tuple) else image)
+            image = image[0] if isinstance(image, tuple) else image
+            frames.append(np.ascontiguousarray(np.asarray(image, dtype=np.uint8)))
             action = controller.get_action(observations)
             observations, rewards, terminated, truncated, info = env.step(action)
             rewards_list.append(rewards)
@@ -44,13 +53,16 @@ class World(ABC):
         print(f"Achieved reward: {np.sum(rewards_list)}")
 
         import imageio
+
         imageio.mimsave(video_name, frames, fps=30)  # Set frames per second (fps)
 
-    def visualise_individual(self, genotype, controller: Controller|None = None, n_steps: int = 50000):
+    def visualise_individual(
+        self, genotype, controller: Controller | None = None, n_steps: int = 50000
+    ):
         if controller is None:
             controller = self.controller
         self.update_robot_xml(genotype)
-        env = self.create_env(render_mode='human')
+        env = self.create_env(render_mode="human")
         rewards_list = []
         observations, info = env.reset()
         controller.reset_controller(1)

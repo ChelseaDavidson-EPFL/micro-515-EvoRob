@@ -1,0 +1,14 @@
+============================================================
+MICRO-515 Final Project — NSGA-II Training Summary
+============================================================
+
+Generations     : 1
+Population size : 4
+Controller      : CPGController  (138 params)
+Genotype size   : 138  (controller=138, body=0)
+
+Best individual (highest min-objective):
+  flat  :     159.10
+  ice   :     215.64
+  hill  :     108.27
+  min   :     108.27

@@ -1,0 +1,10 @@
+Hexapod warm-start preset
+================================
+source_checkpoint : results/test_hexapod_cmaes_curriculum_h1_d02/110/x_best.npy
+world_layout      : hexapod
+directional       : True
+n_params          : 146
+n_weights         : 140
+n_body_params     : 6
+body_lengths_m    : [0.3 , 0.3 , 0.35, 0.35, 0.42, 0.42]
+body_genes        : [-2.00e-01, -2.00e-01, -1.11e-16, -1.11e-16,  2.80e-01,  2.80e-01]

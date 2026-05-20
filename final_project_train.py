@@ -806,8 +806,8 @@ if __name__ == "__main__":
             seed = np.load(seed_path)
             run_cmaes_refinement(
                 seed_genotype=seed,
-                num_generations=100,
-                population_size=32,
+                num_generations=300,
+                population_size=96,
                 sigma=0.2,
                 n_repeats=2,
                 n_steps=200,
