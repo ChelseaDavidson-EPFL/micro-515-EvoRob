@@ -4,9 +4,13 @@ analyse_training_results_cmaes.py
 Post-training analysis for the CMA-ES single-solution refinement.
 
 Produces:
-  1. Convergence plot  — best min-objective and mean fitness over generations
-  2. Bar chart         — per-terrain scores for the best individual
-  3. Videos            — best individual on all three terrains
+  1. Convergence plot       — best min-objective and mean fitness over generations
+  2. Bar chart              — per-terrain scores for the best individual
+  3. Episode distribution   — box plot of score variance per terrain
+  4. Phenotype diversity    — heatmap grid at 4 generation snapshots (matches
+                              slide 9 "Evolution of phenotype diversity" figure)
+  5. Diversity over time    — mean population std across generations (diversity collapse)
+  6. Videos                 — best individual on all three terrains
 
 Usage
 -----
@@ -83,6 +87,42 @@ def load_convergence(results_dir: str):
 
     return (np.array(gens), np.array(bests),
             np.array(means), np.array(stds))
+
+
+def load_population_snapshots(results_dir: str, n_snapshots: int = 4):
+    """Load x.npy (full population) from evenly-spaced generation checkpoints.
+
+    Used for the phenotype diversity heatmap.  Returns a list of
+    (generation, population_array) tuples, evenly spaced across all saved gens.
+    """
+    subdirs = sorted(
+        int(n) for n in os.listdir(results_dir)
+        if os.path.isdir(join(results_dir, n)) and n.isdigit()
+    )
+    # Filter to only those that actually have an x.npy
+    valid = []
+    for g in subdirs:
+        p = join(results_dir, str(g), "x.npy")
+        if os.path.isfile(p):
+            valid.append(g)
+
+    if len(valid) == 0:
+        print("  No x.npy population files found — skipping diversity plot.")
+        return []
+
+    # Pick n_snapshots evenly spaced checkpoints, always include first and last
+    if len(valid) <= n_snapshots:
+        chosen = valid
+    else:
+        indices = np.linspace(0, len(valid) - 1, n_snapshots, dtype=int)
+        chosen  = [valid[i] for i in indices]
+
+    snapshots = []
+    for g in chosen:
+        x = np.load(join(results_dir, str(g), "x.npy"), allow_pickle=True)
+        snapshots.append((g, x))
+        print(f"  Loaded population gen {g}: shape={x.shape}")
+    return snapshots
 
 
 # ---------------------------------------------------------------------------
@@ -232,6 +272,120 @@ def plot_episode_distribution(results: dict, output_dir: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Phenotype diversity heatmap  (matches slide 9 example figure)
+# ---------------------------------------------------------------------------
+
+def plot_phenotype_diversity(snapshots: list, output_dir: str,
+                             n_params_shown: int = 20) -> None:
+    """Heatmap grid showing how population diversity changes over generations.
+
+    Each panel = one generation snapshot.
+    Y-axis = phenotype parameters (first n_params_shown, normalised to [0,1]).
+    X-axis = individuals in the population.
+    Colour  = normalised parameter value (viridis, 0=dark, 1=yellow).
+
+    Matches the "Evolution of phenotype diversity" figure from the slides:
+    diverse/noisy early on → converging horizontal stripes as CMA-ES tightens.
+    """
+    if not snapshots:
+        print("  No population snapshots — skipping phenotype diversity plot.")
+        return
+
+    n_panels = len(snapshots)
+    fig, axes = plt.subplots(1, n_panels, figsize=(4 * n_panels + 1, 5),
+                             sharey=True)
+    if n_panels == 1:
+        axes = [axes]
+
+    # Global min/max across all snapshots for consistent colour scale
+    all_data = np.vstack([x[:, :n_params_shown] for _, x in snapshots])
+    vmin, vmax = all_data.min(), all_data.max()
+    # Normalise to [0, 1] for the colourbar
+    def _norm(x):
+        return (x - vmin) / (vmax - vmin + 1e-8)
+
+    im = None
+    for ax, (gen, x_pop) in zip(axes, snapshots):
+        # x_pop shape: (population, n_params) — take first n_params_shown
+        data = x_pop[:, :n_params_shown].T          # → (n_params_shown, pop)
+        data_norm = _norm(data)
+
+        im = ax.imshow(data_norm, aspect="auto", cmap="viridis",
+                       vmin=0, vmax=1, interpolation="nearest")
+
+        ax.set_title(f"Gen {gen}", fontsize=11, fontweight="bold")
+        ax.set_xlabel("Population", fontsize=9)
+
+        # Y-tick labels: p0, p4, p8, … (every 4th parameter like the slides)
+        tick_step = max(1, n_params_shown // 5)
+        tick_positions = list(range(0, n_params_shown, tick_step))
+        ax.set_yticks(tick_positions)
+        ax.set_yticklabels([f"$p_{{{i}}}$" for i in tick_positions], fontsize=8)
+
+        # X-ticks: 1, midpoint, population size
+        pop_size = data.shape[1]
+        ax.set_xticks([0, pop_size // 2, pop_size - 1])
+        ax.set_xticklabels([1, pop_size // 2 + 1, pop_size], fontsize=8)
+
+    axes[0].set_ylabel("Phenotype parameter", fontsize=10)
+
+    # Shared colourbar on the right
+    cbar = fig.colorbar(im, ax=axes[-1], fraction=0.046, pad=0.04)
+    cbar.set_label("Param. value", fontsize=9)
+    cbar.set_ticks([0, 0.2, 0.4, 0.6, 0.8, 1.0])
+    cbar.set_ticklabels(
+        [f"{vmin + t * (vmax - vmin):.2f}" for t in [0, 0.2, 0.4, 0.6, 0.8, 1.0]],
+        fontsize=7,
+    )
+
+    fig.suptitle("Evolution of phenotype diversity", fontsize=13, fontweight="bold", y=1.02)
+    path = join(output_dir, "cmaes_phenotype_diversity.png")
+    fig.tight_layout()
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+
+def plot_phenotype_std_over_time(results_dir: str, output_dir: str,
+                                 n_params_shown: int = 20) -> None:
+    """Line plot of mean parameter std across the population over generations.
+
+    Shows the collapse of diversity as CMA-ES converges — a single summary
+    curve that complements the heatmap grid.
+    """
+    subdirs = sorted(
+        int(n) for n in os.listdir(results_dir)
+        if os.path.isdir(join(results_dir, n)) and n.isdigit()
+    )
+
+    gens, mean_stds = [], []
+    for g in subdirs:
+        p = join(results_dir, str(g), "x.npy")
+        if not os.path.isfile(p):
+            continue
+        x = np.load(p, allow_pickle=True)
+        # std across individuals for each parameter, then average across params
+        mean_stds.append(x[:, :n_params_shown].std(axis=0).mean())
+        gens.append(g)
+
+    if not gens:
+        return
+
+    fig, ax = plt.subplots(figsize=(7, 4))
+    ax.plot(gens, mean_stds, color="mediumpurple", linewidth=2)
+    ax.fill_between(gens, 0, mean_stds, color="mediumpurple", alpha=0.15)
+    ax.set_xlabel("Generation")
+    ax.set_ylabel("Mean parameter std across population")
+    ax.set_title("Population diversity collapse over generations")
+
+    path = join(output_dir, "cmaes_diversity_over_time.png")
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+
+# ---------------------------------------------------------------------------
 # Video recording
 # ---------------------------------------------------------------------------
 
@@ -329,6 +483,7 @@ def main():
     # ------------------------------------------------------------------
     x_best, f_best_scalar = load_best(args.results_dir)
     gens, bests, means, stds = load_convergence(args.results_dir)
+    snapshots = load_population_snapshots(args.results_dir, n_snapshots=4)
 
     # ------------------------------------------------------------------
     # Evaluate on all terrains
@@ -354,6 +509,10 @@ def main():
         plot_terrain_scores(results, args.output_dir)
         plot_episode_distribution(results, args.output_dir)
         print_summary(results, f_best_scalar)
+
+    # Phenotype diversity — does not require FinalWorld, only checkpoint x.npy files
+    plot_phenotype_diversity(snapshots, args.output_dir, n_params_shown=20)
+    plot_phenotype_std_over_time(args.results_dir, args.output_dir, n_params_shown=20)
 
     # ------------------------------------------------------------------
     # Videos
