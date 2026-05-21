@@ -63,8 +63,10 @@ MAX_EPISODE_STEPS = 1000  # fixed for leaderboard — do not change
 #   4  →  [upper_front, lower_front, upper_back, lower_back]  (more expressive)
 #   8  →  original per-segment encoding
 # ---------------------------------------------------------------------------
-N_BODY_PARAMS = 2  # ← change to 4 for the second phase
+N_BODY_PARAMS = 4  # ← change to 4 for the second phase
 
+# Optimization Mode
+MORPHOLOGY_ONLY = False  # If True, fixed weights must be provided via --seed_path
 
 # ---------------------------------------------------------------------------
 # FinalWorld — body + brain co-evolution across multiple terrains
@@ -83,7 +85,7 @@ class FinalWorld(World):
     giving lengths in [0.1, 0.6] m.
     """
 
-    def __init__(self):
+    def __init__(self, fixed_weights=None):
         # ------------------------------------------------------------------
         # Controller - Choose your controller — swap for your own MLP, SO2Controller, Hebbian, or custom.
         #              Whatever you choose determines self.n_weights (controller parameter count).
@@ -91,7 +93,7 @@ class FinalWorld(World):
         self.controller = CPGController(
             input_size=32,
             output_size=8,
-            hidden_size=4,  # Reduced from 8 to shrink search space (~200 params total)
+            hidden_size=8,  # Reduced from 8 to shrink search space (~200 params total)
             base_freq=2 * np.pi,
             max_dfreq=np.pi,
             dt=0.05,
@@ -100,7 +102,12 @@ class FinalWorld(World):
 
         self.n_weights = self.controller.n_params
         self.n_body_params = N_BODY_PARAMS
-        self.n_params = self.n_weights + self.n_body_params
+
+        self.fixed_weights = fixed_weights
+        if self.fixed_weights is not None:
+            self.n_params = self.n_body_params
+        else:
+            self.n_params = self.n_weights + self.n_body_params
 
         # ------------------------------------------------------------------
         # Temp files - Temporary directory holds AntRobot.xml + one combined world XML per terrain
@@ -168,13 +175,18 @@ class FinalWorld(World):
         Standard Ant is ~0.28m (upper) and ~0.56m (lower); using a narrower upper bound
         avoids producing extremely tall legs that may violate the environment's healthy z-range.
         """
-        control_params = genotype[
-            : self.n_weights
-        ]  # full scale — let CPG produce real actions
-
-        # MAPPING FOR BOUNDS [-1, 1]:
-        # should be (0.2, 0.7)
-        body_raw = 0.2 + (genotype[self.n_weights :] + 1) / 4  # scale to [0.2, 0.7] m
+        if self.fixed_weights is not None:
+            control_params = self.fixed_weights
+            # Dans ce cas, genotype contient uniquement les paramètres corps (taille 4)
+            body_raw = 0.2 + (genotype + 1) / 8
+        else:
+            control_params = genotype[
+                : self.n_weights
+            ]  # full scale — let CPG produce real actions
+            # MAPPING FOR BOUNDS [-1, 1]:
+            body_raw = (
+                0.2 + (genotype[self.n_weights :] + 1) / 8
+            )  # scale to [0.2, 0.7] m
 
         self.controller.geno2pheno(control_params)
 
@@ -711,10 +723,29 @@ def run_cmaes_refinement(
     results_dir: str = None,
     random_seed: int = 42,
 ) -> None:
-    """CMA-ES phase: refine a seed solution using min-objective scalarisation."""
+    """CMA-ES phase: refine morphology only or full genotype."""
     np.random.seed(random_seed)
 
-    world = FinalWorld()
+    fixed_weights = None
+    initial_morphology = None
+
+    if MORPHOLOGY_ONLY:
+        if seed_genotype is None:
+            raise ValueError(
+                "MORPHOLOGY_ONLY requires a --seed_path to freeze weights."
+            )
+
+        # Extract weights to freeze and morphology to start from
+        temp_world = FinalWorld()  # temporary to get weight count
+        n_w = temp_world.n_weights
+        fixed_weights = seed_genotype[:n_w]
+        initial_morphology = seed_genotype[n_w:]
+        print(
+            f"MODE: MORPHOLOGY ONLY. Freezing {n_w} weights. Optimizing {N_BODY_PARAMS} params."
+        )
+
+    world = FinalWorld(fixed_weights=fixed_weights)
+
     print(f"Controller    : {type(world.controller).__name__}")
     print(
         f"Genotype      : {world.n_params} params"
@@ -734,11 +765,11 @@ def run_cmaes_refinement(
     )
 
     # Warm-start: replace CMA-ES initial mean with the seed genotype
-    if seed_genotype is not None:
+    if initial_morphology is not None:
+        ea.es.x0 = initial_morphology.tolist()
+        print(f"Warm-starting morphology from provided seed: {initial_morphology}")
+    elif seed_genotype is not None:
         ea.es.x0 = seed_genotype.tolist()
-        print(f"Warm-starting from provided seed")
-        print(f"Seed       : provided ({seed_genotype.shape})")
-
     else:
         # Cold start — random initialisation across the full bounds
         ea.es.x0 = np.random.uniform(bounds[0], bounds[1], world.n_params).tolist()
@@ -767,6 +798,16 @@ def run_cmaes_refinement(
 
         save_ckpt = gen % ckpt_interval == 0
         ea.tell(pop, fitnesses, save_checkpoint=save_ckpt)
+
+        # If we are in morphology-only mode, the x_best saved by CMA-ES is incomplete (size 4).
+        # We manually overwrite it with a full version (weights + morpho) for compatibility.
+        if MORPHOLOGY_ONLY and save_ckpt:
+            full_x_best = np.concatenate([fixed_weights, ea.x_best_so_far])
+            # Update the root checkpoint
+            np.save(join(results_dir, "x_best.npy"), full_x_best)
+            # Update the generational checkpoint
+            os.makedirs(join(results_dir, str(gen)), exist_ok=True)
+            np.save(join(results_dir, str(gen), "x_best.npy"), full_x_best)
 
         if save_ckpt and os.path.isfile(_best_xml_stage):
             shutil.copy2(_best_xml_stage, join(results_dir, str(gen), "Robot.xml"))
@@ -807,8 +848,8 @@ if __name__ == "__main__":
             seed = np.load(seed_path)
             run_cmaes_refinement(
                 seed_genotype=seed,
-                num_generations=800,
-                population_size=64,
+                num_generations=100,
+                population_size=16,
                 sigma=0.2,
                 n_repeats=2,
                 n_steps=300,
