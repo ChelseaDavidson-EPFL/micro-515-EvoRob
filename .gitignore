@@ -1,6 +1,6 @@
-# results/*
-# /*.xml
-# *.mp4
+results/*
+/*.xml
+*.mp4
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

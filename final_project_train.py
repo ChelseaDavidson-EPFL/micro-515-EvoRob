@@ -759,8 +759,8 @@ def run_cmaes_refinement(
             f3 = world.evaluate_individual(
                 genotype, n_repeats=n_repeats, n_steps=n_steps
             )
-            weights = np.array([1.0, 1.0, 2.0])   # flat, ice, hill — upweight hill
-            fitnesses[idx] = float((f3 * weights).sum())# ← min-objective scalar
+            weights = np.array([1.0, 1.0, 2.0])  # flat, ice, hill — upweight hill
+            fitnesses[idx] = float((f3 * weights).sum())  # ← min-objective scalar
 
             if fitnesses[idx] >= ea.f_best_so_far:
                 shutil.copy2(join(world.temp_dir.name, "Robot.xml"), _best_xml_stage)
@@ -808,7 +808,7 @@ if __name__ == "__main__":
             run_cmaes_refinement(
                 seed_genotype=seed,
                 num_generations=800,
-                population_size=32,
+                population_size=64,
                 sigma=0.2,
                 n_repeats=2,
                 n_steps=300,
@@ -819,7 +819,7 @@ if __name__ == "__main__":
             run_cmaes_refinement(
                 seed_genotype=None,  # cold start
                 num_generations=800,  # more generations since I noted it was still improving
-                population_size=32,  # Increased to better explore
+                population_size=64,  # Increased to better explore
                 sigma=0.2,
                 bounds=(-1, 1),
                 n_repeats=3,  # balance between speed and noise

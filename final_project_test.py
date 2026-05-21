@@ -41,6 +41,8 @@ Always include in your zip:
 
 import argparse
 import os
+import shutil
+import subprocess
 import numpy as np
 
 os.environ.setdefault("MUJOCO_GL", "glfw")
@@ -103,6 +105,86 @@ def _neutral_reward(info: dict) -> float:
     )
 
 
+def _write_video(out_path: str, frames: list[np.ndarray], fps: int = 20) -> None:
+    """Write RGB/RGBA frames to an MP4 file using ffmpeg."""
+    if len(frames) == 0:
+        raise ValueError("No frames to write")
+
+    ffmpeg_exe = shutil.which("ffmpeg") or shutil.which("ffmpeg.exe")
+    if ffmpeg_exe is None:
+        try:
+            import imageio_ffmpeg
+
+            ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+        except ImportError:
+            ffmpeg_exe = None
+    if ffmpeg_exe is None:
+        raise RuntimeError("ffmpeg executable not found in PATH")
+
+    first = np.ascontiguousarray(np.asarray(frames[0]))
+    if first.ndim != 3 or first.shape[2] not in (3, 4):
+        raise ValueError(f"Expected RGB/RGBA frame, got shape {first.shape}")
+    if first.shape[2] == 4:
+        first = first[:, :, :3]
+    if first.dtype != np.uint8:
+        if np.issubdtype(first.dtype, np.floating) and first.max() <= 1.0:
+            first = (255 * np.clip(first, 0.0, 1.0)).astype(np.uint8)
+        else:
+            first = first.astype(np.uint8)
+
+    height, width = first.shape[:2]
+    cmd = [
+        ffmpeg_exe,
+        "-y",
+        "-f",
+        "rawvideo",
+        "-vcodec",
+        "rawvideo",
+        "-pix_fmt",
+        "rgb24",
+        "-s",
+        f"{width}x{height}",
+        "-r",
+        str(fps),
+        "-i",
+        "-",
+        "-an",
+        "-vcodec",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        out_path,
+    ]
+
+    proc = subprocess.Popen(
+        cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+    )
+    try:
+        for frame in frames:
+            arr = np.ascontiguousarray(np.asarray(frame))
+            if arr.ndim != 3 or arr.shape[2] not in (3, 4):
+                raise ValueError(f"Expected RGB/RGBA frame, got shape {arr.shape}")
+            if arr.shape[2] == 4:
+                arr = arr[:, :, :3]
+            if arr.dtype != np.uint8:
+                if np.issubdtype(arr.dtype, np.floating) and arr.max() <= 1.0:
+                    arr = (255 * np.clip(arr, 0.0, 1.0)).astype(np.uint8)
+                else:
+                    arr = arr.astype(np.uint8)
+            proc.stdin.write(arr.tobytes())
+    finally:
+        if proc.stdin is not None:
+            proc.stdin.close()
+        stderr = (
+            proc.stderr.read().decode("utf-8", errors="replace") if proc.stderr else ""
+        )
+        return_code = proc.wait()
+        if return_code != 0:
+            raise RuntimeError(
+                f"ffmpeg failed with code {return_code}: {stderr.strip()}"
+            )
+
+
 def run_episodes(world: EvalWorld, n_episodes: int, seed: int) -> list:
     rng = np.random.default_rng(seed)
     env = gym.make(
@@ -131,8 +213,6 @@ def run_episodes(world: EvalWorld, n_episodes: int, seed: int) -> list:
 
 def record_video(world: EvalWorld, out_path: str, seed: int) -> None:
     try:
-        import imageio
-
         env = gym.make(
             "EvalEnv-v0",
             robot_path=world.world_file,
@@ -146,7 +226,7 @@ def record_video(world: EvalWorld, out_path: str, seed: int) -> None:
             frame = env.render()
             if isinstance(frame, tuple):
                 frame = frame[0]
-            frames.append(np.ascontiguousarray(np.asarray(frame, dtype=np.uint8)))
+            frames.append(np.ascontiguousarray(np.asarray(frame)))
             ctrl_obs = world.sensor_fn(obs) if world.sensor_fn is not None else obs
             action = world.controller.get_action(ctrl_obs)
             if action.ndim > 1:
@@ -155,7 +235,7 @@ def record_video(world: EvalWorld, out_path: str, seed: int) -> None:
             if terminated or truncated:
                 break
         env.close()
-        imageio.mimwrite(out_path, frames, fps=20)
+        _write_video(out_path, frames, fps=20)
         print(f"Video saved: {out_path}")
     except Exception as exc:
         print(f"Video skipped: {exc}")
