@@ -6,18 +6,18 @@ Controller : CPGController  (230 params)
 Genotype   : 238 params  (controller=230, body=4)
 Reward     : healthy_reward + x_position - ctrl_cost - cfrc_cost
 
-Mean  : 3954.22
-Std   : 263.49
-Best  : 4300.61
-Worst : 3528.57
+Mean  : 2981.43
+Std   : 1038.06
+Best  : 4090.66
+Worst : 955.54
 
-Episode   1:    3590.35
-Episode   2:    3786.46
-Episode   3:    4188.59
-Episode   4:    4096.38
-Episode   5:    4300.61
-Episode   6:    4117.43
-Episode   7:    3706.15
-Episode   8:    4018.23
-Episode   9:    4209.44
-Episode  10:    3528.57
+Episode   1:    3739.49
+Episode   2:    2991.10
+Episode   3:     955.54
+Episode   4:    1070.93
+Episode   5:    4090.66
+Episode   6:    3344.70
+Episode   7:    3853.89
+Episode   8:    3183.40
+Episode   9:    3081.14
+Episode  10:    3503.42

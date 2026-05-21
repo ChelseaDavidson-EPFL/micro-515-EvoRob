@@ -63,7 +63,7 @@ MAX_EPISODE_STEPS = 1000  # fixed for leaderboard — do not change
 #   4  →  [upper_front, lower_front, upper_back, lower_back]  (more expressive)
 #   8  →  original per-segment encoding
 # ---------------------------------------------------------------------------
-N_BODY_PARAMS = 4  # ← change to 4 for the second phase
+N_BODY_PARAMS = 2  # ← change to 4 for the second phase
 
 
 # ---------------------------------------------------------------------------
@@ -759,7 +759,8 @@ def run_cmaes_refinement(
             f3 = world.evaluate_individual(
                 genotype, n_repeats=n_repeats, n_steps=n_steps
             )
-            fitnesses[idx] = float(f3.min())  # ← min-objective scalar
+            weights = np.array([1.0, 1.0, 2.0])   # flat, ice, hill — upweight hill
+            fitnesses[idx] = float((f3 * weights).sum())# ← min-objective scalar
 
             if fitnesses[idx] >= ea.f_best_so_far:
                 shutil.copy2(join(world.temp_dir.name, "Robot.xml"), _best_xml_stage)
@@ -772,7 +773,7 @@ def run_cmaes_refinement(
 
         if gen % 5 == 0:
             print(
-                f"Gen {gen:4d}  best_min={ea.f_best_so_far:.2f}"
+                f"Gen {gen:4d}  best={ea.f_best_so_far:.2f}"
                 f"  mean={fitnesses.mean():.2f} ± {fitnesses.std():.2f}"
             )
 
@@ -806,20 +807,20 @@ if __name__ == "__main__":
             seed = np.load(seed_path)
             run_cmaes_refinement(
                 seed_genotype=seed,
-                num_generations=300,
-                population_size=96,
+                num_generations=800,
+                population_size=32,
                 sigma=0.2,
                 n_repeats=2,
-                n_steps=200,
+                n_steps=300,
                 ckpt_interval=5,
                 results_dir=args.results_dir,
             )
         else:
             run_cmaes_refinement(
                 seed_genotype=None,  # cold start
-                num_generations=300,  # more generations since I noted it was still improving
-                population_size=96,  # Increased to better explore
-                sigma=0.5,
+                num_generations=800,  # more generations since I noted it was still improving
+                population_size=32,  # Increased to better explore
+                sigma=0.2,
                 bounds=(-1, 1),
                 n_repeats=3,  # balance between speed and noise
                 n_steps=500,

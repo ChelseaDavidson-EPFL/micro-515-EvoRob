@@ -1,4 +1,5 @@
 """evorob.world.envs.eval_ice"""
+
 from os import path
 
 import numpy as np
@@ -37,13 +38,21 @@ class EvalIceEnv(MujocoEnv, utils.EzPickle):
         reset_noise_scale: float = 0.1,
         **kwargs,
     ):
-        xml_file_path = robot_path if path.isabs(robot_path) else path.join(
-            path.dirname(path.realpath(__file__)), robot_path
+        xml_file_path = (
+            robot_path
+            if path.isabs(robot_path)
+            else path.join(path.dirname(path.realpath(__file__)), robot_path)
         )
 
         utils.EzPickle.__init__(
-            self, xml_file_path, frame_skip, default_camera_config,
-            ctrl_cost_weight, cfrc_cost_weight, reset_noise_scale, **kwargs,
+            self,
+            xml_file_path,
+            frame_skip,
+            default_camera_config,
+            ctrl_cost_weight,
+            cfrc_cost_weight,
+            reset_noise_scale,
+            **kwargs,
         )
 
         self._ctrl_cost_weight = ctrl_cost_weight
@@ -51,7 +60,9 @@ class EvalIceEnv(MujocoEnv, utils.EzPickle):
         self._reset_noise_scale = reset_noise_scale
 
         MujocoEnv.__init__(
-            self, xml_file_path, frame_skip,
+            self,
+            xml_file_path,
+            frame_skip,
             observation_space=None,
             default_camera_config=default_camera_config,
             **kwargs,
@@ -69,35 +80,41 @@ class EvalIceEnv(MujocoEnv, utils.EzPickle):
 
     def step(self, action):
         x_before = self.data.qpos[0]
-        y_before = self.data.qpos[1]          # track lateral position
+        y_before = self.data.qpos[1]  # track lateral position
         self.do_simulation(action, self.frame_skip)
         x_after = self.data.qpos[0]
         y_after = self.data.qpos[1]
 
         x_velocity = (x_after - x_before) / self.dt
-        y_drift    = abs(y_after - y_before) / self.dt   # lateral velocity
+        y_drift = abs(y_after - y_before) / self.dt  # lateral velocity
 
         healthy_reward = 1.0
-        ctrl_cost = float(np.sum(action ** 2) * self._ctrl_cost_weight)
+        ctrl_cost = float(np.sum(action**2) * self._ctrl_cost_weight)
         cfrc_cost = float(np.sum(self.data.cfrc_ext[1:] ** 2) * self._cfrc_cost_weight)
         terminated = self._is_terminated()
 
-        forward_bonus = max(x_velocity, 0) * 5.0
-        still_penalty = -2.0 if x_velocity < 0.05 else 0   # stronger than before
-        lateral_penalty = -y_drift * 2.0                      # penalise sideways movement
-        backward_penalty = -abs(min(x_velocity, 0)) * 3.0     # explicit backward penalty
+        forward_bonus = max(x_velocity, 0) * 10.0
+        still_penalty = -5.0 if x_velocity < 0.05 else 0  # stronger than before
+        y_displacement_penalty = (
+            -abs(y_after) * 3.0
+        )  # penalise absolute lateral drift from centre
+        lateral_penalty = -y_drift * 5.0  # penalise sideways movement
+        backward_penalty = -abs(min(x_velocity, 0)) * 3.0  # explicit backward penalty
 
         R = self.data.body(1).xmat.reshape(3, 3)
-        heading_reward = float(R[:, 0][0]) * 2.0
+        heading_reward = float(R[:, 0][0]) * 1.0
 
-        reward = (healthy_reward
-                + forward_bonus
-                + still_penalty
-                + lateral_penalty
-                + backward_penalty
-                + heading_reward
-                - ctrl_cost * 0.1
-                - cfrc_cost * 0.1)
+        reward = (
+            healthy_reward
+            + forward_bonus
+            + still_penalty
+            + lateral_penalty
+            + y_displacement_penalty
+            + backward_penalty
+            + heading_reward
+            - ctrl_cost * 0.1
+            - cfrc_cost * 0.1
+        )
 
         info = {
             "healthy_reward": -10.0 if terminated else healthy_reward,
@@ -113,23 +130,32 @@ class EvalIceEnv(MujocoEnv, utils.EzPickle):
 
     def _is_terminated(self) -> bool:
         z = float(self.data.qpos[2])
+        y = float(self.data.qpos[1])
+        R = self.data.body(1).xmat.reshape(3, 3)
         return (
             not np.isfinite(self.state_vector()).all()
+            or float(R[2, 2])
+            < 0.5  # Kill episode if tilted > 60 degrees, R[2,2] is the cosine of the robot's overall tilt angle
             or z < 0.2
             or z > 1.0
+            or abs(y) > 2.0  # terminate if drifted more than 2m sideways
         )
 
     def _get_obs(self):
-        base = np.concatenate((self.data.qpos.flat[2:], self.data.qvel.flat.copy()))  # 27
+        base = np.concatenate(
+            (self.data.qpos.flat[2:], self.data.qvel.flat.copy())
+        )  # 27
         R = self.data.body(1).xmat.reshape(3, 3)
-        tilt = R[2, :2]                          # 2 — most terrain-discriminative signal
+        tilt = R[2, :2]  # 2 — most terrain-discriminative signal
         torso_vel = self.data.qvel.flat[:3].copy()  # 3 — slip detection
         return np.concatenate([base, tilt, torso_vel])  # 32-dim instead of 49
 
     def reset_model(self):
         noise = self._reset_noise_scale
-        qpos = self.init_qpos + self.np_random.uniform(-noise, noise, size=self.model.nq)
-        qvel = self.init_qvel + noise ** 2 * self.np_random.standard_normal(self.model.nv)
+        qpos = self.init_qpos + self.np_random.uniform(
+            -noise, noise, size=self.model.nq
+        )
+        qvel = self.init_qvel + noise**2 * self.np_random.standard_normal(self.model.nv)
         self.set_state(qpos, qvel)
         return self._get_obs()
 
