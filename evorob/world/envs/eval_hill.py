@@ -94,17 +94,10 @@ class EvalHillEnv(MujocoEnv, utils.EzPickle):
         terminated = self._is_terminated(xyz_velocity)
 
         # Forward and Upward progress since last step
-        forward_bonus = max(x_velocity, 0) * 10.0
-
-        # Massive reward purely for fighting gravity and gaining height
-        z_velocity = float(xyz_velocity[2])
-        z_elevation_bonus = max(z_velocity, 0) * 7.0
-
-        still_penalty = -5.0 if x_velocity < 0.05 else 0
-        lateral_penalty = -(abs(y_after - y_before) / self.dt) * 5.0
-        y_displacement_penalty = (
-            -abs(y_after) * 3.0
-        )  # penalise absolute lateral drift from centre
+        forward_bonus = max(x_velocity, 0) * 15.0   # was 10.0 - increase since hard on hill
+        still_penalty = -2.0 if x_velocity < 0.05 else 0
+        lateral_penalty = -(abs(y_after - y_before) / self.dt) * 2.0   # was 5.0
+        y_displacement_penalty = -abs(y_after) * 1.0                           # was 3.0
         backward_penalty = -abs(min(x_velocity, 0)) * 3.0
 
         # Heading: reward torso facing +x
@@ -114,7 +107,6 @@ class EvalHillEnv(MujocoEnv, utils.EzPickle):
         reward = (
             healthy_reward
             + forward_bonus
-            + z_elevation_bonus
             + still_penalty
             + lateral_penalty
             + y_displacement_penalty
@@ -155,8 +147,8 @@ class EvalHillEnv(MujocoEnv, utils.EzPickle):
     def _torso_upside_down(self) -> bool:
         R = self.data.body(1).xmat.reshape(3, 3)
         return (
-            float(R[2, 2]) < 0.5
-        )  # Kill episode if tilted > 60 degrees, R[2,2] is the cosine of the robot's overall tilt angle
+            float(R[2, 2]) < 0.3   # ~73 degrees
+        )  # Kill episode if tilted > 73 degrees, R[2,2] is the cosine of the robot's overall tilt angle
 
     def _get_obs(self):
         base = np.concatenate(

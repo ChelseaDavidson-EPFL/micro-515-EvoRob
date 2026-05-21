@@ -94,7 +94,7 @@ class EvalIceEnv(MujocoEnv, utils.EzPickle):
         terminated = self._is_terminated()
 
         forward_bonus = max(x_velocity, 0) * 10.0
-        still_penalty = -5.0 if x_velocity < 0.05 else 0  # stronger than before
+        still_penalty = -2.0 if x_velocity < 0.05 else 0
         y_displacement_penalty = (
             -abs(y_after) * 3.0
         )  # penalise absolute lateral drift from centre
