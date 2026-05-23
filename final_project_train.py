@@ -39,6 +39,7 @@ os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
 
 import shutil
 import xml.etree.ElementTree as xml
+import multiprocessing
 from multiprocessing import Pool
 from os.path import join
 from tempfile import TemporaryDirectory
@@ -47,7 +48,7 @@ import gymnasium as gym
 import numpy as np
 import scipy.ndimage
 from PIL import Image
-from gymnasium.vector import SyncVectorEnv
+from datetime import datetime
 
 import evorob.world  # registers EvalEnv-v0
 from evorob.algorithms.nsga import NSGAII
@@ -102,6 +103,21 @@ def _init_worker() -> None:
 def _eval_genotype(genotype: np.ndarray, n_repeats: int, n_steps: int) -> np.ndarray:
     """Evaluate a single genotype on all three terrains (runs in a worker process)."""
     return _worker_world.evaluate_individual(genotype, n_repeats=n_repeats, n_steps=n_steps)
+
+
+def _starmap_interruptible(pool: Pool, func, args_iter, poll: float = 0.5) -> list:
+    """pool.starmap that responds to Ctrl-C within `poll` seconds.
+
+    pool.starmap blocks on threading.Event.wait() indefinitely, so KeyboardInterrupt
+    in the main thread is never processed. Using starmap_async + timeout polling lets
+    the main thread wake up every `poll` seconds and check for signals.
+    """
+    ar = pool.starmap_async(func, list(args_iter))
+    while True:
+        try:
+            return ar.get(timeout=poll)
+        except multiprocessing.TimeoutError:
+            pass  # still running — loop back and check again
 
 
 # ---------------------------------------------------------------------------
@@ -360,41 +376,34 @@ class FinalWorld(World):
     def _run_env(
         self, env_id: str, world_file: str, n_repeats: int, n_steps: int
     ) -> float:
-        """Run n_repeats episodes and return the mean total reward."""
-        envs = SyncVectorEnv(
-            [
-                (
-                    lambda eid, wf: lambda: gym.make(
-                        eid, robot_path=wf, max_episode_steps=n_steps
-                    )
-                )(env_id, world_file)
-                for _ in range(n_repeats)
-            ]
-        )
-        self.controller.reset_controller(batch_size=n_repeats)
-        rewards = np.zeros((n_steps, n_repeats))
-        x_start = None
-        obs, info = envs.reset()
-        done = np.zeros(n_repeats, dtype=bool)
+        """Run n_repeats sequential episodes in one environment and return mean reward.
 
-        for t in range(n_steps):
-            self._set_controller_navigation_feedback(envs, active_mask=~done)
-            actions = np.where(done[:, None], 0, self.controller.get_action(obs))
-            obs, r, terminated, truncated, info_dict = envs.step(actions)
-            rewards[t, ~done] = r[~done]
-            done |= terminated | truncated
-
-            # Terminate early if the robot is stuck (Step 100 instead of 200)
-            if t == 100:
-                x_pos = info_dict.get("x_position", np.zeros(n_repeats))
-                stuck = x_pos < 0.1  # less than 10 cm in 100 steps = stuck
-                done |= stuck
-
-            if done.all():
-                break
-
-        envs.close()
-        return float(rewards.sum(axis=0).mean())
+        One gym.make() per terrain instead of n_repeats — avoids repeated MuJoCo
+        model compilation which dominated wall-time vs actual simulation.
+        """
+        rng = np.random.default_rng()
+        env = gym.make(env_id, robot_path=world_file, max_episode_steps=n_steps)
+        total_rewards = []
+        try:
+            for _ in range(n_repeats):
+                self.controller.reset_controller(batch_size=1)
+                obs, _ = env.reset(seed=int(rng.integers(0, 2**31)))
+                total, done, t = 0.0, False, 0
+                while not done:
+                    self._set_controller_navigation_feedback(env)
+                    action = self.controller.get_action(obs)
+                    if action.ndim > 1:
+                        action = action.squeeze(0)
+                    obs, r, terminated, truncated, info = env.step(action)
+                    total += float(r)
+                    done = terminated or truncated
+                    t += 1
+                    if t == 100 and float(info.get("x_position", 1.0)) < 0.1:
+                        done = True  # stuck early-exit
+                total_rewards.append(total)
+        finally:
+            env.close()
+        return float(np.mean(total_rewards))
 
     def _eval_flat(self, n_repeats: int = 3, n_steps: int = 400) -> float:
         return self._run_env("FlatEnv-v0", self.flat_world_file, n_repeats, n_steps)
@@ -738,8 +747,8 @@ def run_multi_task_evolution(
       with Pool(processes=n_workers, initializer=_init_worker) as pool:
         for gen in range(num_generations):
             pop = ea.ask()
-            results = pool.starmap(
-                _eval_genotype,
+            results = _starmap_interruptible(
+                pool, _eval_genotype,
                 [(g, n_repeats, n_steps) for g in pop],
             )
             fitnesses = np.array(results)           # (pop_size, 3)
@@ -821,7 +830,9 @@ def run_cmaes_refinement(
     )
 
     if results_dir is None:
-        results_dir = join(ROOT_DIR, "results", "final_project_cmaes")
+        results_dir = join(ROOT_DIR, "results", "final_project_cmaes_default")
+
+    print(f"Writing results to {results_dir}")
 
     ea = CMAESAPI(
         n_params=world.n_params,
@@ -857,8 +868,8 @@ def run_cmaes_refinement(
       with Pool(processes=n_workers, initializer=_init_worker) as pool:
         for gen in range(num_generations):
             pop = ea.ask()                              # (popsize, n_params)
-            results = pool.starmap(
-                _eval_genotype,
+            results = _starmap_interruptible(
+                pool, _eval_genotype,
                 [(g, n_repeats, n_steps) for g in pop],
             )
             f3_arr    = np.array(results)               # (pop_size, 3)
@@ -878,8 +889,9 @@ def run_cmaes_refinement(
 
             if gen % 5 == 0:
                 print(
-                    f"Gen {gen:4d}  best={ea.f_best_so_far:.2f}"
-                    f"  mean={fitnesses.mean():.2f} ± {fitnesses.std():.2f}"
+                    f"{datetime.now().strftime('%H:%M:%S')}: "
+                    f"Gen {gen:4d}  best={ea.f_best_so_far:10.2f}"
+                    f"  mean={fitnesses.mean():8.2f} ± {fitnesses.std():7.2f}"
                 )
 
     except KeyboardInterrupt:
@@ -933,6 +945,7 @@ if __name__ == "__main__":
                 n_repeats=4,  # 4 repeats: CMA-ES is more noise-sensitive than NSGA-II
                 n_steps=500,
                 ckpt_interval=10,
+                results_dir=args.results_dir,
             )
     else:
         run_multi_task_evolution(
