@@ -30,6 +30,7 @@ evolved robot on it using final_project_test.py — it is not trained on.
 import os
 import shutil
 import xml.etree.ElementTree as xml
+from multiprocessing import Pool
 from os.path import join
 from tempfile import TemporaryDirectory
 
@@ -73,6 +74,24 @@ MAX_EPISODE_STEPS = 1000  # fixed for leaderboard — do not change
 #   8  →  original per-segment encoding
 # ---------------------------------------------------------------------------
 N_BODY_PARAMS = 2  # ← change to 4 for the second phase
+
+
+# ---------------------------------------------------------------------------
+# Multiprocessing worker functions  (module-level so they are picklable on Windows)
+# ---------------------------------------------------------------------------
+
+_worker_world: "FinalWorld | None" = None
+
+
+def _init_worker() -> None:
+    """Initialise one FinalWorld per worker process, reused across generations."""
+    global _worker_world
+    _worker_world = FinalWorld()
+
+
+def _eval_genotype(genotype: np.ndarray, n_repeats: int, n_steps: int) -> np.ndarray:
+    """Evaluate a single genotype on all three terrains (runs in a worker process)."""
+    return _worker_world.evaluate_individual(genotype, n_repeats=n_repeats, n_steps=n_steps)
 
 
 # ---------------------------------------------------------------------------
@@ -702,22 +721,28 @@ def run_multi_task_evolution(
     _best_xml_stage = join(results_dir, "_best_robot.xml")  # staging copy of best robot
     _best_scalar = -np.inf
 
-    for gen in range(num_generations):
-        pop = ea.ask()
-        fitnesses = np.empty((len(pop), n_obj))
-        for idx, genotype in enumerate(pop):
-            fitnesses[idx] = world.evaluate_individual(
-                genotype, n_repeats=n_repeats, n_steps=n_steps
+    n_workers = max(1, os.cpu_count() - 1)
+    print(f"Parallel workers : {n_workers}  (of {os.cpu_count()} logical cores)")
+    with Pool(processes=n_workers, initializer=_init_worker) as pool:
+        for gen in range(num_generations):
+            pop = ea.ask()
+            results = pool.starmap(
+                _eval_genotype,
+                [(g, n_repeats, n_steps) for g in pop],
             )
-            scalar = float(fitnesses[idx].min())  # ← min objective = generalist proxy
-            if scalar > _best_scalar:
-                _best_scalar = scalar
+            fitnesses = np.array(results)           # (pop_size, 3)
+
+            scalars = fitnesses.min(axis=1)
+            best_idx = int(np.argmax(scalars))
+            if scalars[best_idx] > _best_scalar:
+                _best_scalar = scalars[best_idx]
+                world.update_robot_xml(pop[best_idx])
                 shutil.copy2(join(world.temp_dir.name, "Robot.xml"), _best_xml_stage)
 
-        save_ckpt = gen % ckpt_interval == 0
-        ea.tell(pop, fitnesses, save_checkpoint=save_ckpt)
-        if save_ckpt:
-            shutil.copy2(_best_xml_stage, join(results_dir, str(gen), "Robot.xml"))
+            save_ckpt = gen % ckpt_interval == 0
+            ea.tell(pop, fitnesses, save_checkpoint=save_ckpt)
+            if save_ckpt:
+                shutil.copy2(_best_xml_stage, join(results_dir, str(gen), "Robot.xml"))
 
     # ------------------------------------------------------------------
     # Save the best generalist (highest min-objective in final population)
@@ -810,31 +835,35 @@ def run_cmaes_refinement(
     os.makedirs(results_dir, exist_ok=True)
     _best_xml_stage = join(results_dir, "_best_robot.xml")
 
-    for gen in range(num_generations):
-        pop = ea.ask()  # (popsize, n_params)
-        fitnesses = np.empty(len(pop))
-
-        for idx, genotype in enumerate(pop):
-            f3 = world.evaluate_individual(
-                genotype, n_repeats=n_repeats, n_steps=n_steps
+    n_workers = max(1, os.cpu_count() - 1)
+    print(f"Parallel workers : {n_workers}  (of {os.cpu_count()} logical cores)")
+    with Pool(processes=n_workers, initializer=_init_worker) as pool:
+        for gen in range(num_generations):
+            pop = ea.ask()                              # (popsize, n_params)
+            results = pool.starmap(
+                _eval_genotype,
+                [(g, n_repeats, n_steps) for g in pop],
             )
-            weights = np.array([1.0, 1.0, 2.0])  # flat, ice, hill — upweight hill
-            fitnesses[idx] = float((f3 * weights).sum())  # ← min-objective scalar
+            f3_arr    = np.array(results)               # (pop_size, 3)
+            weights   = np.array([1.0, 1.0, 2.0])      # flat, ice, hill — upweight hill
+            fitnesses = (f3_arr * weights).sum(axis=1)  # weighted-sum scalarisation
 
-            if fitnesses[idx] >= ea.f_best_so_far:
+            best_idx = int(np.argmax(fitnesses))
+            if fitnesses[best_idx] >= ea.f_best_so_far:
+                world.update_robot_xml(pop[best_idx])
                 shutil.copy2(join(world.temp_dir.name, "Robot.xml"), _best_xml_stage)
 
-        save_ckpt = gen % ckpt_interval == 0
-        ea.tell(pop, fitnesses, save_checkpoint=save_ckpt)
+            save_ckpt = gen % ckpt_interval == 0
+            ea.tell(pop, fitnesses, save_checkpoint=save_ckpt)
 
-        if save_ckpt and os.path.isfile(_best_xml_stage):
-            shutil.copy2(_best_xml_stage, join(results_dir, str(gen), "Robot.xml"))
+            if save_ckpt and os.path.isfile(_best_xml_stage):
+                shutil.copy2(_best_xml_stage, join(results_dir, str(gen), "Robot.xml"))
 
-        if gen % 5 == 0:
-            print(
-                f"Gen {gen:4d}  best={ea.f_best_so_far:.2f}"
-                f"  mean={fitnesses.mean():.2f} ± {fitnesses.std():.2f}"
-            )
+            if gen % 5 == 0:
+                print(
+                    f"Gen {gen:4d}  best={ea.f_best_so_far:.2f}"
+                    f"  mean={fitnesses.mean():.2f} ± {fitnesses.std():.2f}"
+                )
 
     print(f"\nCMA-ES refinement complete.  Best min-score: {ea.f_best_so_far:.2f}")
 
