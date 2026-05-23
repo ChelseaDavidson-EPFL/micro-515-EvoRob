@@ -916,11 +916,11 @@ if __name__ == "__main__":
         else:
             run_cmaes_refinement(
                 seed_genotype=None,  # cold start
-                num_generations=800,  # more generations since I noted it was still improving
-                population_size=64,  # Increased to better explore
-                sigma=0.2,
+                num_generations=800,
+                population_size=64,
+                sigma=0.5,  # large sigma for cold start: rule-of-thumb = range/4 = 2/4
                 bounds=(-1, 1),
-                n_repeats=3,  # balance between speed and noise
+                n_repeats=4,  # 4 repeats: CMA-ES is more noise-sensitive than NSGA-II
                 n_steps=500,
                 ckpt_interval=10,
             )
