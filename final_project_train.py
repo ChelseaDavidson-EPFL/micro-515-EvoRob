@@ -873,7 +873,7 @@ def run_cmaes_refinement(
                 [(g, n_repeats, n_steps) for g in pop],
             )
             f3_arr    = np.array(results)               # (pop_size, 3)
-            weights   = np.array([1.0, 1.0, 2.0])      # flat, ice, hill — upweight hill
+            weights   = np.array([1.0, 1.0, 1.0])      # flat, ice, hill — upweight hill
             fitnesses = (f3_arr * weights).sum(axis=1)  # weighted-sum scalarisation
 
             best_idx = int(np.argmax(fitnesses))
