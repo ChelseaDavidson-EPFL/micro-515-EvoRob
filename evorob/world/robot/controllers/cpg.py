@@ -98,8 +98,8 @@ class CPGController(Controller):
         pid_integral_limit: float = 1.0,
         pid_steer_limit: float = 0.25,
         pid_steer_sign: float = 1.0,
-        pid_left_hip_indices: tuple[int, ...] = (2, 6),
-        pid_right_hip_indices: tuple[int, ...] = (0, 4),
+        pid_left_hip_indices: tuple[int, ...] = (0, 2),
+        pid_right_hip_indices: tuple[int, ...] = (4, 6),
     ):
         self.n_input      = input_size
         self.n_output     = output_size
@@ -186,14 +186,19 @@ class CPGController(Controller):
         cols = np.arange(1, n_st, 2)
         A[rows, cols] = np.ones(num_dofs) * 2 * np.pi
 
-        # Random inter-connections
-        n_possible = (num_dofs * (num_dofs - 1)) // 2
-        n_active   = max(1, int(round(n_possible * density)))
-        tri_r, tri_c = np.triu_indices(num_dofs, k=1)
-        perm         = rng.permutation(len(tri_r))[:n_active]
-        sel_r, sel_c = tri_r[perm], tri_c[perm]
-        inter        = rng.random(n_active)
-        A[sel_r * 2, sel_c * 2] = inter
+        # Structured bilaterally symmetric inter-joint couplings.
+        # Joint layout (from geno2pheno leg ordering):
+        #   fl=0 (+x,+y), fr=2 (-x,+y), bl=4 (-x,-y), br=6 (+x,-y)
+        # Mirror map across y=0: fl(0)↔br(6), fr(2)↔bl(4)
+        # The six pairs below cover all biologically relevant coupling types
+        # while keeping the topology symmetric about the sagittal plane:
+        #   contralateral diagonals (trot partners): (0,6), (2,4)
+        #   ipsilateral same-x (fore-aft same side): (0,2), (4,6)
+        #   ipsilateral cross-x (fore-aft other side): (0,4), (2,6)
+        inter_pairs = [(0, 6), (2, 4), (0, 2), (4, 6), (0, 4), (2, 6)]
+        init_w = rng.random(len(inter_pairs))
+        for w, (i, j) in zip(init_w, inter_pairs):
+            A[i * 2, j * 2] = w
 
         weight_map = np.argwhere(A > 0)
         weights    = A[weight_map[:, 0], weight_map[:, 1]].copy()

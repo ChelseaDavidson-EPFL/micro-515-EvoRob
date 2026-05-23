@@ -71,7 +71,7 @@ from evorob.world.robot.controllers.cpg import CPGController
 MY_CONTROLLER = CPGController(
     input_size=32,
     output_size=8,
-    hidden_size=4,
+    hidden_size=8,
     base_freq=2 * np.pi,
     max_dfreq=np.pi,
     dt=0.05,

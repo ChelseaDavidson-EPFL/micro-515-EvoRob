@@ -93,16 +93,16 @@ class EvalIceEnv(MujocoEnv, utils.EzPickle):
         cfrc_cost = float(np.sum(self.data.cfrc_ext[1:] ** 2) * self._cfrc_cost_weight)
         terminated = self._is_terminated()
 
-        forward_bonus = max(x_velocity, 0) * 10.0
+        forward_bonus = min(max(x_velocity, 0), 1.5) * 3.0
         still_penalty = -2.0 if x_velocity < 0.05 else 0
-        y_displacement_penalty = (
-            -abs(y_after) * 3.0
-        )  # penalise absolute lateral drift from centre
-        lateral_penalty = -y_drift * 5.0  # penalise sideways movement
-        backward_penalty = -abs(min(x_velocity, 0)) * 3.0  # explicit backward penalty
+        y_displacement_penalty = -abs(y_after) * 3.0
+        lateral_penalty = -y_drift * 5.0
+        backward_penalty = -abs(min(x_velocity, 0)) * 3.0
 
         R = self.data.body(1).xmat.reshape(3, 3)
-        heading_reward = float(R[:, 0][0]) * 1.0
+        heading_reward = float(R[:, 0][0]) * 3.0
+        z_velocity = float(self.data.qvel.flat[2])
+        vertical_penalty = -abs(z_velocity) * 3.0
 
         reward = (
             healthy_reward
@@ -112,8 +112,9 @@ class EvalIceEnv(MujocoEnv, utils.EzPickle):
             + y_displacement_penalty
             + backward_penalty
             + heading_reward
-            - ctrl_cost * 0.1
-            - cfrc_cost * 0.1
+            + vertical_penalty
+            - ctrl_cost
+            - cfrc_cost
         )
 
         info = {
