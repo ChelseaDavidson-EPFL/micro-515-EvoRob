@@ -28,6 +28,15 @@ evolved robot on it using final_project_test.py — it is not trained on.
 """
 
 import os
+
+# Limit internal threading in MuJoCo/numpy/BLAS before any imports.
+# Without this, each worker process spawns its own OpenMP thread pool,
+# causing thread oversubscription and low effective CPU utilisation.
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
+
 import shutil
 import xml.etree.ElementTree as xml
 from multiprocessing import Pool
@@ -87,6 +96,7 @@ def _init_worker() -> None:
     """Initialise one FinalWorld per worker process, reused across generations."""
     global _worker_world
     _worker_world = FinalWorld()
+    print(f"  [worker pid={os.getpid()}] initialised", flush=True)
 
 
 def _eval_genotype(genotype: np.ndarray, n_repeats: int, n_steps: int) -> np.ndarray:
