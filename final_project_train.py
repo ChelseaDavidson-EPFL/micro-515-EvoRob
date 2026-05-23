@@ -17,6 +17,7 @@ evolved robot on it using final_project_test.py — it is not trained on.
 
 import os
 import shutil
+import time
 import xml.etree.ElementTree as xml
 from os.path import join
 from tempfile import TemporaryDirectory
@@ -28,10 +29,13 @@ from PIL import Image
 from gymnasium.vector import AsyncVectorEnv
 
 import evorob.world  # registers EvalEnv-v0
+from evorob.algorithms.ea_api import CMAESAPI
 from evorob.algorithms.nsga import NSGAII
 from evorob.utils.filesys import get_last_checkpoint_dir, get_project_root
 from evorob.world.base import World
 from evorob.world.robot.controllers.sinoid import OscillatoryController
+from evorob.world.robot.controllers.hysteresis_sinoid import HysteresisSinoidController
+from evorob.world.robot.controllers.so2_steering import SO2SteeringController
 from evorob.world.robot.controllers.mlp import NeuralNetworkController
 from evorob.world.robot.morphology.ant_custom_robot import AntRobot
 
@@ -56,12 +60,10 @@ class FinalWorld(World):
     def __init__(self):
         # Choose your controller — swap for your own MLP, SO2Controller, Hebbian, or custom.
         # Whatever you choose determines self.n_weights (controller parameter count).
-        #
-        # from evorob.world.robot.controllers.mlp import NeuralNetworkController  # your impl
-        self.controller = OscillatoryController(output_size=8)
+        self.controller = SO2SteeringController(output_size=8)
 
         self.n_weights = self.controller.n_params
-        self.n_body_params = 8  # 4 legs × (upper + lower segment length)
+        self.n_body_params = 4  # Symmetric: (front upper/lower, back upper/lower)
         self.n_params = self.n_weights + self.n_body_params
 
         # Temporary directory holds AntRobot.xml + one combined world XML per terrain
@@ -71,26 +73,35 @@ class FinalWorld(World):
         self.hill_world_file = join(self.temp_dir.name, "WorldHill.xml")
         self.world_file = self.hill_world_file  # default for visualisation
 
+        # Cost shaping for lateral steering.
+        self.y_penalty_weight = 2.0  # Plus doux au centre pour favoriser la vitesse X
+        self.y_out_of_bounds = 4.0  # Limite demandée
+        self.out_of_bounds_penalty = (
+            500.0  # Pénalité massive (par step) en cas de sortie
+        )
+        self.fall_penalty = 500.0  # Pénalité de chute sévère
+        self.joint_velocity_weight = 0.01
+
         # Joint geometry — matches the AntRobot topology
         self.joint_limits = [
             [-30, 30],
-            [30, 70],
+            [30, 70],  # Leg 1: FL (+X, +Y)
             [-30, 30],
-            [-70, -30],
+            [-70, -30],  # Leg 2: BL (-X, +Y)
             [-30, 30],
-            [-70, -30],
+            [-70, -30],  # Leg 3: BR (-X, -Y)
             [-30, 30],
-            [30, 70],
+            [30, 70],  # Leg 4: FR (+X, -Y)
         ]
         self.joint_axis = [
             [0, 0, 1],
-            [-1, 1, 0],
+            [-1, 1, 0],  # FL
             [0, 0, 1],
-            [1, 1, 0],
+            [1, 1, 0],  # BL
             [0, 0, 1],
-            [-1, 1, 0],
+            [-1, 1, 0],  # BR
             [0, 0, 1],
-            [1, 1, 0],
+            [1, 1, 0],  # FR
         ]
 
         # Custom sensor function — intercepts the raw env observation before it
@@ -113,118 +124,35 @@ class FinalWorld(World):
         """Decode genotype into controller weights and body parameters.
 
         Splits genotype into:
-          genotype[:n_weights]  → controller (scaled by 0.1 before loading)
-          genotype[n_weights:]  → 8 leg-segment lengths via (g+1)/4 + 0.1
+          genotype[:145]        → controller (Extreme SO2 Steering)
+          genotype[145:]        → 4 leg-segment lengths (front up/lo, back up/lo)
+                                  Symmetric & Low Sensitivity mapping.
 
         Returns (points, connectivity_mat) for AntRobot construction.
         """
-        control_params = genotype[: self.n_weights] * 0.1
-        body_params = (genotype[self.n_weights :] + 1) / 4 + 0.1
+        control_params = genotype[: self.n_weights]
+
+        # MORPHOLOGIE : Faible sensibilité (Sigma effectif bas)
+        # On centre sur 0.35m avec une variation de +/- 0.05m
+        body_params = 0.35 + (genotype[self.n_weights :] * 0.05)
+
         self.controller.geno2pheno(control_params)
 
-        (
-            front_left_leg,
-            front_left_ankle,
-            front_right_leg,
-            front_right_ankle,
-            back_left_leg,
-            back_left_ankle,
-            back_right_leg,
-            back_right_ankle,
-        ) = body_params
+        f_up, f_lo, b_up, b_lo = body_params
 
-        # Define the 3D coordinates of the relative tree structure
-        front_left_hip_xyz = np.array([0.2, 0.2, 0])
-        front_left_knee_xyz = (
-            np.array(
-                [np.sqrt(0.5 * front_left_leg**2), np.sqrt(0.5 * front_left_leg**2), 0]
-            )
-            + front_left_hip_xyz
-        )
-        front_left_toe_xyz = (
-            np.array(
-                [
-                    np.sqrt(0.5 * front_left_ankle**2),
-                    np.sqrt(0.5 * front_left_ankle**2),
-                    0,
-                ]
-            )
-            + front_left_knee_xyz
-        )
-
-        front_right_hip_xyz = np.array([-0.2, 0.2, 0])
-        front_right_knee_xyz = (
-            np.array(
-                [
-                    -np.sqrt(0.5 * front_right_leg**2),
-                    np.sqrt(0.5 * front_right_leg**2),
-                    0,
-                ]
-            )
-            + front_right_hip_xyz
-        )
-        front_right_toe_xyz = (
-            np.array(
-                [
-                    -np.sqrt(0.5 * front_right_ankle**2),
-                    np.sqrt(0.5 * front_right_ankle**2),
-                    0,
-                ]
-            )
-            + front_right_knee_xyz
-        )
-
-        back_left_hip_xyz = np.array([-0.2, -0.2, 0])
-        back_left_knee_xyz = (
-            np.array(
-                [-np.sqrt(0.5 * back_left_leg**2), -np.sqrt(0.5 * back_left_leg**2), 0]
-            )
-            + back_left_hip_xyz
-        )
-        back_left_toe_xyz = (
-            np.array(
-                [
-                    -np.sqrt(0.5 * back_left_ankle**2),
-                    -np.sqrt(0.5 * back_left_ankle**2),
-                    0,
-                ]
-            )
-            + back_left_knee_xyz
-        )
-
-        back_right_hip_xyz = np.array([0.2, -0.2, 0])
-        back_right_knee_xyz = (
-            np.array(
-                [np.sqrt(0.5 * back_right_leg**2), -np.sqrt(0.5 * back_right_leg**2), 0]
-            )
-            + back_right_hip_xyz
-        )
-        back_right_toe_xyz = (
-            np.array(
-                [
-                    np.sqrt(0.5 * back_right_ankle**2),
-                    -np.sqrt(0.5 * back_right_ankle**2),
-                    0,
-                ]
-            )
-            + back_right_knee_xyz
-        )
+        # Nouvelle nomenclature cohérente avec l'axe X forward
+        # Ordre des points : FL, BL, BR, FR pour correspondre au contrôleur
+        # Front Left (+X, +Y)
+        fl_h, fl_k, fl_t = self._build_leg(0.2, 0.2, 1, 1, f_up, f_lo)
+        # Back Left (-X, +Y)
+        bl_h, bl_k, bl_t = self._build_leg(-0.2, 0.2, -1, 1, b_up, b_lo)
+        # Back Right (-X, -Y)
+        br_h, br_k, br_t = self._build_leg(-0.2, -0.2, -1, -1, b_up, b_lo)
+        # Front Right (+X, -Y)
+        fr_h, fr_k, fr_t = self._build_leg(0.2, -0.2, 1, -1, f_up, f_lo)
 
         points = np.vstack(
-            [
-                front_left_hip_xyz,
-                front_left_knee_xyz,
-                front_left_toe_xyz,
-                front_right_hip_xyz,
-                front_right_knee_xyz,
-                front_right_toe_xyz,
-                back_left_hip_xyz,
-                back_left_knee_xyz,
-                back_left_toe_xyz,
-                back_right_hip_xyz,
-                back_right_knee_xyz,
-                back_right_toe_xyz,
-            ]
+            [fl_h, fl_k, fl_t, bl_h, bl_k, bl_t, br_h, br_k, br_t, fr_h, fr_k, fr_t]
         )
 
         # define the type of connections [FIXED ARCHITECTURE]
@@ -245,6 +173,14 @@ class FinalWorld(World):
             ]
         )
         return points, connectivity_mat
+
+    def _build_leg(self, x, y, dx, dy, upper, lower):
+        hip = np.array([x, y, 0])
+        step = np.sqrt(0.5) * upper
+        knee = hip + np.array([dx * step, dy * step, 0])
+        step2 = np.sqrt(0.5) * lower
+        toe = knee + np.array([dx * step2, dy * step2, 0])
+        return hip, knee, toe
 
     # ------------------------------------------------------------------
     # Robot XML generation
@@ -331,11 +267,38 @@ class FinalWorld(World):
         if self.sensor_fn is not None:
             obs = self.sensor_fn(obs)
         done = np.zeros(n_repeats, dtype=bool)
+
         for t in range(n_steps):
             actions = np.where(done[:, None], 0, self.controller.get_action(obs))
-            obs, r, terminated, truncated, _ = envs.step(actions)
+            obs, r, terminated, truncated, info = envs.step(actions)
+
             if self.sensor_fn is not None:
                 obs = self.sensor_fn(obs)
+
+            # --- NOUVELLE FONCTION DE COÛT ---
+            curr_y = info.get("y_position", np.zeros(n_repeats))
+
+            # 1. Bonus Forward : déjà inclus dans 'r' (MuJoCo reward)
+
+            # 2. Malus y^2 (Dérive latérale)
+            # On pénalise le carré pour que les petites déviations soient tolérées
+            # mais que les sorties de couloir soient très coûteuses.
+            r -= self.y_penalty_weight * (curr_y**2)
+
+            # 3. Malus de chute (Classique)
+            # On inflige une grosse pénalité si l'épisode se termine prématurément
+            r[terminated] -= self.fall_penalty
+
+            # 4. Malus de fluidité (Dérivée des angles)
+            # Les vitesses articulaires sont les indices 19 à 26 dans l'observation Ant-v4
+            joint_vels = obs[:, 19:27]
+            r -= self.joint_velocity_weight * np.sum(np.square(joint_vels), axis=1)
+
+            # 3. Limite de piste plus stricte : couloir de 1.0m max
+            out_of_bounds = np.abs(curr_y) > self.y_out_of_bounds
+            r[out_of_bounds] -= self.out_of_bounds_penalty
+            done |= out_of_bounds
+
             rewards[t, ~done] = r[~done]
             done |= terminated | truncated
             if done.all():
@@ -366,13 +329,29 @@ class FinalWorld(World):
     # ------------------------------------------------------------------
 
     def evaluate_individual(
-        self, genotype: np.ndarray, n_repeats: int = 4, n_steps: int = 500
-    ) -> np.ndarray:
+        self,
+        genotype: np.ndarray,
+        n_repeats: int = 4,
+        n_steps: int = 500,
+        multi_objective: bool = True,
+    ):
         """Evaluate one genotype on all three training environments.
 
-        Returns a 1-D array of three objective values: [flat, ice, hill].
+        Returns a 1-D array of objectives if multi_objective is True, else a scalar mean across
+        flat, ice, and hill.
         """
         self.update_robot_xml(genotype)
+        if not multi_objective:
+            return float(
+                np.mean(
+                    [
+                        self._eval_flat(n_repeats, n_steps),
+                        self._eval_ice(n_repeats, n_steps),
+                        self._eval_hill(n_repeats, n_steps),
+                    ]
+                )
+            )
+
         return np.array(
             [
                 self._eval_flat(n_repeats, n_steps),
@@ -600,7 +579,9 @@ def run_multi_task_evolution(
     bounds: tuple = (-1, 1),
     ckpt_interval: int = 10,
     results_dir: str = None,
+    warmstart_path: str = "warmstart_so2_intermediate.npy",
     random_seed: int = 42,
+    use_cmaes: bool = True,
 ) -> None:
     np.random.seed(random_seed)
 
@@ -613,50 +594,113 @@ def run_multi_task_evolution(
     if results_dir is None:
         results_dir = join(ROOT_DIR, "results", "final_project")
 
-    ea = NSGAII(
-        population_size=population_size,
-        n_opt_params=world.n_params,
-        n_parents=n_parents,
-        num_generations=num_generations,
-        bounds=bounds,
-        mutation_prob=mutation_prob,
-        crossover_prob=crossover_prob,
-        output_dir=results_dir,
-    )
+    # --- Chargement du warmstart ---
+    warmstart_geno = None
+    if warmstart_path and os.path.exists(warmstart_path):
+        try:
+            warmstart_geno = np.load(warmstart_path)
+            if warmstart_geno.size == world.n_params:
+                print(f"Warmstart chargé depuis {warmstart_path}")
+            else:
+                print(
+                    f"Attention: Taille du warmstart ({warmstart_geno.size}) incorrecte. Attendu: {world.n_params}"
+                )
+                warmstart_geno = None
+        except Exception as e:
+            print(f"Erreur lors du chargement du warmstart: {e}")
 
-    n_obj = 3
-    print(f"\nRunning {num_generations} generations  pop={population_size}")
-    print(f"Objectives : [flat, ice, hill]")
-    print(f"Checkpoints: {results_dir}\n")
+    if use_cmaes:
+        print("\nMODE: CMA-ES (Single Objective - Flat/Ice/Hill Mean)")
+        ea = CMAESAPI(
+            n_params=world.n_params,
+            population_size=population_size,
+            num_generations=num_generations,
+            sigma=0.2,
+            bounds=bounds,
+            output_dir=results_dir,
+        )
+        if warmstart_geno is not None:
+            ea.es.x0 = warmstart_geno.tolist()
+    else:
+        print("\nMODE: NSGA-II (Multi-Objective)")
+        ea = NSGAII(
+            population_size=population_size,
+            n_opt_params=world.n_params,
+            n_parents=n_parents,
+            num_generations=num_generations,
+            bounds=bounds,
+            mutation_prob=mutation_prob,
+            crossover_prob=crossover_prob,
+            output_dir=results_dir,
+        )
+
+    n_obj = 3 if not use_cmaes else 1
+    terrain_count = 1 if use_cmaes else 3
+    expected_evals = num_generations * population_size * terrain_count
+    print(f"Running {num_generations} generations  pop={population_size}")
+    print(f"Checkpoints: {results_dir}")
+    print(
+        f"Expected evaluations: {expected_evals}  ("
+        f"{terrain_count} terrain(s) per individual, {n_repeats} repeat(s), {n_steps} step(s))\n",
+        flush=True,
+    )
 
     os.makedirs(results_dir, exist_ok=True)
     _best_xml_stage = join(results_dir, "_best_robot.xml")  # staging copy of best robot
     _best_scalar = -np.inf
+    t0 = time.perf_counter()
 
     for gen in range(num_generations):
+        gen_t0 = time.perf_counter()
         pop = ea.ask()
-        fitnesses = np.empty((len(pop), n_obj))
+        fitnesses = (
+            np.empty(len(pop))
+            if use_cmaes
+            else np.empty((len(pop), n_obj), dtype=float)
+        )
+        scalars = np.zeros(len(pop), dtype=float)
+
         for idx, genotype in enumerate(pop):
             fitnesses[idx] = world.evaluate_individual(
-                genotype, n_repeats=n_repeats, n_steps=n_steps
+                genotype,
+                n_repeats=n_repeats,
+                n_steps=n_steps,
+                multi_objective=(not use_cmaes),
             )
-            scalar = float(fitnesses[idx].sum())
+            scalar = float(fitnesses[idx]) if use_cmaes else float(fitnesses[idx].sum())
+            scalars[idx] = scalar
+
             if scalar > _best_scalar:
                 _best_scalar = scalar
                 shutil.copy2(
                     join(world.temp_dir.name, "Robot.xml"),
                     _best_xml_stage,
                 )
+
         save_ckpt = gen % ckpt_interval == 0
         ea.tell(pop, fitnesses, save_checkpoint=save_ckpt)
-        if save_ckpt:
-            shutil.copy2(
-                _best_xml_stage,
-                join(results_dir, str(gen), "Robot.xml"),
-            )
+        gen_elapsed = time.perf_counter() - gen_t0
+        total_elapsed = time.perf_counter() - t0
+        gen_best = float(np.max(scalars))
+        gen_mean = float(np.mean(scalars))
+        # Minimal per-generation summary (keeps output light)
+        print(
+            f"Gen {gen + 1}/{num_generations}: best={gen_best:.3f} mean={gen_mean:.3f} "
+            f"time={gen_elapsed:.1f}s total={total_elapsed:.1f}s",
+            flush=True,
+        )
 
-    # --- Training summary ---
-    best_f = ea.f_best_so_far  # shape (3,) for NSGA-II
+    # Sauvegarde finale du meilleur individu à la racine pour un accès facile
+    if ea.x_best_so_far is not None:
+        np.save(join(results_dir, "x_best.npy"), ea.x_best_so_far)
+        shutil.copy2(_best_xml_stage, join(results_dir, "Robot.xml"))
+        print(
+            f"\nMeilleur génotype final sauvegardé dans : {join(results_dir, 'x_best.npy')}"
+        )
+
+    best_f = np.atleast_1d(
+        ea.f_best_so_far
+    )  # shape (3,) for NSGA-II or (1,) for CMA-ES
     score_path = join(results_dir, "training_score.txt")
     with open(score_path, "w") as f:
         f.write("=" * 60 + "\n")
@@ -674,20 +718,67 @@ def run_multi_task_evolution(
         )
         f.write("Best individual (highest sum of objectives):\n")
         labels = ["flat", "ice", "hill"]
-        for label, val in zip(labels, best_f):
-            f.write(f"  {label:<6}: {float(val):10.2f}\n")
+        if best_f.size == 3:
+            for label, val in zip(labels, best_f):
+                f.write(f"  {label:<6}: {float(val):10.2f}\n")
+        else:
+            f.write(f"  flat  : {float(best_f[0]):10.2f}\n")
+
         f.write(f"  {'sum':<6}: {float(best_f.sum()):10.2f}\n")
     print(f"\nTraining summary saved to: {score_path}")
 
 
 if __name__ == "__main__":
-    # Quick smoke-test — 2 generations, tiny population
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="MICRO-515 Final Project training pipeline."
+    )
+    parser.add_argument(
+        "--results_dir",
+        type=str,
+        default=join(ROOT_DIR, "results", "night_run_so2"),
+        help="Directory used to save checkpoints and summaries.",
+    )
+    parser.add_argument(
+        "--warmstart_path",
+        type=str,
+        default="warmstart_so2_intermediate.npy",
+        help="Path to the warmstart genotype.",
+    )
+    parser.add_argument("--num_generations", type=int, default=200)
+    parser.add_argument("--population_size", type=int, default=64)
+    parser.add_argument("--n_repeats", type=int, default=4)
+    parser.add_argument("--n_steps", type=int, default=1000)
+    parser.add_argument("--ckpt_interval", type=int, default=1)
+    parser.add_argument("--random_seed", type=int, default=42)
+    parser.add_argument(
+        "--use_nsga",
+        action="store_true",
+        help="Use NSGA-II instead of CMA-ES.",
+    )
+    parser.add_argument(
+        "--smoke_test",
+        action="store_true",
+        help="Run a very small configuration to validate the pipeline quickly.",
+    )
+    args = parser.parse_args()
+
+    if args.smoke_test:
+        args.num_generations = 2
+        args.population_size = 8
+        args.n_repeats = 1
+        args.n_steps = 100
+        args.ckpt_interval = 1
+
     run_multi_task_evolution(
-        num_generations=100,
-        population_size=32,
-        n_parents=32,
-        n_repeats=2,
-        n_steps=100,
-        ckpt_interval=1,
-        results_dir=join(ROOT_DIR, "results", "final_test"),
+        num_generations=args.num_generations,
+        population_size=args.population_size,
+        n_repeats=args.n_repeats,
+        n_steps=args.n_steps,
+        ckpt_interval=args.ckpt_interval,
+        results_dir=args.results_dir,
+        warmstart_path=args.warmstart_path,
+        random_seed=args.random_seed,
+        use_cmaes=not args.use_nsga,
     )

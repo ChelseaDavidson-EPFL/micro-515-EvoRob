@@ -40,8 +40,23 @@ class CMAESAPI(EA):
     def ask(self) -> np.ndarray:
         return np.array(self.es.ask())
 
-    def tell(self, population: np.ndarray, fitnesses: np.ndarray,
-             save_checkpoint: bool = False) -> None:
+    def tell(
+        self,
+        population: np.ndarray,
+        fitnesses: np.ndarray,
+        save_checkpoint: bool = False,
+    ) -> None:
+        population = np.asarray(population)
+        fitnesses = np.asarray(fitnesses)
+
+        # Elitism: keep the best-so-far individual alive inside the next update.
+        if self.x_best_so_far is not None and len(population) > 0:
+            worst_idx = int(np.argmin(fitnesses))
+            population = population.copy()
+            fitnesses = fitnesses.copy()
+            population[worst_idx] = self.x_best_so_far.copy()
+            fitnesses[worst_idx] = max(fitnesses[worst_idx], self.f_best_so_far)
+
         self.es.tell(population.tolist(), (-fitnesses).tolist())
 
         self.full_f.append(fitnesses)
@@ -105,13 +120,19 @@ class EvosaxAPI(EA):
 
     def ask(self) -> np.ndarray:
         import jax
+
         self.rng, rng_ask = jax.random.split(self.rng)
         population, self.state = self.strategy.ask(rng_ask, self.state, self.es_params)
         return np.array(population)
 
-    def tell(self, population: np.ndarray, fitnesses: np.ndarray,
-             save_checkpoint: bool = True) -> None:
+    def tell(
+        self,
+        population: np.ndarray,
+        fitnesses: np.ndarray,
+        save_checkpoint: bool = True,
+    ) -> None:
         import jax.numpy as jnp
+
         self.state = self.strategy.tell(
             population, jnp.array(fitnesses), self.state, self.es_params
         )
@@ -159,9 +180,7 @@ class PyribsAPI(EA):
         self.x = None
         self.f = None
 
-        self.archive = GridArchive(
-            solution_dim=n_params, dims=[1], ranges=[(0, 1)]
-        )
+        self.archive = GridArchive(solution_dim=n_params, dims=[1], ranges=[(0, 1)])
         initial_solution = np.random.uniform(-1, 1, n_params)
         self.emitter = GaussianEmitter(
             self.archive, sigma=sigma, x0=initial_solution, batch_size=population_size
@@ -171,8 +190,12 @@ class PyribsAPI(EA):
     def ask(self) -> np.ndarray:
         return self.scheduler.ask()
 
-    def tell(self, population: np.ndarray, fitnesses: np.ndarray,
-             save_checkpoint: bool = True) -> None:
+    def tell(
+        self,
+        population: np.ndarray,
+        fitnesses: np.ndarray,
+        save_checkpoint: bool = True,
+    ) -> None:
         measures = np.zeros((len(fitnesses), 1))
         self.scheduler.tell(fitnesses, measures)
 

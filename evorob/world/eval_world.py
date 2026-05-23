@@ -6,7 +6,10 @@ from tempfile import TemporaryDirectory
 
 import numpy as np
 
-os.environ.setdefault("MUJOCO_GL", "egl")
+if os.name == "nt":
+    os.environ.setdefault("MUJOCO_GL", "glfw")
+else:
+    os.environ.setdefault("MUJOCO_GL", "egl")
 
 from evorob.utils.filesys import get_last_checkpoint_dir, get_project_root
 from evorob.world.base import World
@@ -43,7 +46,7 @@ class EvalWorld(World):
     def __init__(self):
         self.controller = self._default_controller()
         self.n_weights = self.controller.n_params
-        self.n_body_params = 8          # 4 legs × (upper, lower)
+        self.n_body_params = 8  # 4 legs × (upper, lower)
         self.n_params = self.n_weights + self.n_body_params
 
         self.temp_dir = TemporaryDirectory()
@@ -51,16 +54,24 @@ class EvalWorld(World):
         self.world_file = join(self.temp_dir.name, "eval_terrain.xml")
 
         self.joint_limits = [
-            [-30, 30], [30, 70],
-            [-30, 30], [-70, -30],
-            [-30, 30], [-70, -30],
-            [-30, 30], [30, 70],
+            [-30, 30],
+            [30, 70],
+            [-30, 30],
+            [-70, -30],
+            [-30, 30],
+            [-70, -30],
+            [-30, 30],
+            [30, 70],
         ]
         self.joint_axis = [
-            [0, 0, 1], [-1, 1, 0],
-            [0, 0, 1], [1, 1, 0],
-            [0, 0, 1], [-1, 1, 0],
-            [0, 0, 1], [1, 1, 0],
+            [0, 0, 1],
+            [-1, 1, 0],
+            [0, 0, 1],
+            [1, 1, 0],
+            [0, 0, 1],
+            [-1, 1, 0],
+            [0, 0, 1],
+            [1, 1, 0],
         ]
 
         # Mirror FinalWorld.sensor_fn — set this if your training used a custom
@@ -73,7 +84,8 @@ class EvalWorld(World):
 
     @staticmethod
     def _default_controller():
-        from evorob.world.robot.controllers.mlp_sol import NeuralNetworkController
+        from evorob.world.robot.controllers.mlp import NeuralNetworkController
+
         return NeuralNetworkController(input_size=27, output_size=8, hidden_size=8)
 
     def set_controller(self, controller: Controller) -> None:
@@ -85,7 +97,9 @@ class EvalWorld(World):
         self.controller = controller
         self.n_weights = controller.n_params
         self.n_params = self.n_weights + self.n_body_params
-        print(f"Controller set: {type(controller).__name__}  ({controller.n_params} params)")
+        print(
+            f"Controller set: {type(controller).__name__}  ({controller.n_params} params)"
+        )
 
     # ------------------------------------------------------------------
     # Robot XML injection — same pattern as FinalWorld
@@ -105,7 +119,9 @@ class EvalWorld(World):
         robot_dest_path = join(self.temp_dir.name, robot_filename)
         if os.path.abspath(final_body_path) != os.path.abspath(robot_dest_path):
             shutil.copy2(final_body_path, robot_dest_path)
-        shutil.copy2(_EVAL_TERRAIN_IMAGE, join(self.temp_dir.name, basename(_EVAL_TERRAIN_IMAGE)))
+        shutil.copy2(
+            _EVAL_TERRAIN_IMAGE, join(self.temp_dir.name, basename(_EVAL_TERRAIN_IMAGE))
+        )
 
         world = xml.parse(_EVAL_TERRAIN_XML)
         robot_env = world.getroot()
@@ -127,7 +143,7 @@ class EvalWorld(World):
         The body morphology is NOT regenerated here — call update_robot_xml first
         to provide the robot XML, then call geno2pheno to load the controller.
         """
-        self.controller.geno2pheno(genotype[:self.n_weights])
+        self.controller.geno2pheno(genotype[: self.n_weights])
 
     # ------------------------------------------------------------------
     # One-shot loader from a FinalWorld checkpoint
@@ -178,6 +194,7 @@ class EvalWorld(World):
         """Return a ready-to-use EvalEnv-v0 gymnasium environment."""
         import gymnasium as gym
         import evorob.world  # ensures EvalEnv-v0 is registered
+
         return gym.make(
             "EvalEnv-v0",
             robot_path=self.world_file,
@@ -189,8 +206,9 @@ class EvalWorld(World):
     # Required World abstract methods
     # ------------------------------------------------------------------
 
-    def evaluate_individual(self, genotype: np.ndarray, n_repeats: int = 4,
-                            n_steps: int = 500) -> float:
+    def evaluate_individual(
+        self, genotype: np.ndarray, n_repeats: int = 4, n_steps: int = 500
+    ) -> float:
         """Evaluate a genotype on the eval terrain. Returns mean neutral reward."""
         self.geno2pheno(genotype)
         import gymnasium as gym
@@ -198,8 +216,9 @@ class EvalWorld(World):
 
         rewards = []
         for _ in range(n_repeats):
-            env = gym.make("EvalEnv-v0", robot_path=self.world_file,
-                           max_episode_steps=n_steps)
+            env = gym.make(
+                "EvalEnv-v0", robot_path=self.world_file, max_episode_steps=n_steps
+            )
             self.controller.reset_controller(batch_size=1)
             obs, _ = env.reset()
             total = 0.0

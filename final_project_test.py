@@ -43,12 +43,16 @@ import argparse
 import os
 import numpy as np
 
-os.environ.setdefault("MUJOCO_GL", "egl")
+if os.name == "nt":
+    os.environ.setdefault("MUJOCO_GL", "glfw")
+else:
+    os.environ.setdefault("MUJOCO_GL", "egl")
 
-import evorob.world          # registers EvalEnv-v0
+import evorob.world  # registers EvalEnv-v0
 import gymnasium as gym
 
 from evorob.world.eval_world import EvalWorld
+from evorob.world.robot.controllers.so2_steering import SO2SteeringController
 
 # ===========================================================================
 # STUDENT CONFIGURATION — edit this section
@@ -56,29 +60,29 @@ from evorob.world.eval_world import EvalWorld
 
 # --- Controller ---
 # Set this to the controller you used during training.
-# Leave None to use the default (mlp_sol, input=27, output=8, hidden=8).
+# The default below matches the current SO2 steering pipeline.
 #
 # from evorob.world.robot.controllers.mlp import NeuralNetworkController
 # MY_CONTROLLER = NeuralNetworkController(input_size=27, output_size=8, hidden_size=8)
-#
+
 # from evorob.world.robot.controllers.so2 import SO2Controller
 # MY_CONTROLLER = SO2Controller(input_size=27, output_size=8, hidden_size=8)
 
-MY_CONTROLLER = None
+MY_CONTROLLER = SO2SteeringController(output_size=8)
 
 # --- Paths ---
 # Option A: directory that contains x_best.npy (recommended)
 CHECKPOINT_DIR = "results/final_project"
 
 # Option B: provide the robot XML and genotype as separate files
-ROBOT_XML_PATH = None   # e.g. "/abs/path/to/Robot.xml"
-GENOTYPE_PATH  = None   # e.g. "/abs/path/to/x_best.npy"
+ROBOT_XML_PATH = None  # e.g. "/abs/path/to/Robot.xml"
+GENOTYPE_PATH = None  # e.g. "/abs/path/to/x_best.npy"
 
 # --- Output ---
 OUTPUT_DIR = "evaluation_output"
-N_EPISODES = 10     # increase to 256 for the final leaderboard submission
-SEED       = 0      # fixed — do NOT change for a fair comparison
-MAX_STEPS  = 1000   # fixed — do NOT change
+N_EPISODES = 10  # increase to 256 for the final leaderboard submission
+SEED = 0  # fixed — do NOT change for a fair comparison
+MAX_STEPS = 1000  # fixed — do NOT change
 
 # ===========================================================================
 
@@ -87,21 +91,22 @@ def _neutral_reward(info: dict) -> float:
     """Leaderboard reward: healthy_reward + x_position - ctrl_cost - cfrc_cost."""
     return (
         float(info.get("healthy_reward", 1.0))
-        + float(info.get("x_position",   0.0))
-        - float(info.get("ctrl_cost",     0.0))
-        - float(info.get("cfrc_cost",     0.0))
+        + float(info.get("x_position", 0.0))
+        - float(info.get("ctrl_cost", 0.0))
+        - float(info.get("cfrc_cost", 0.0))
     )
 
 
 def run_episodes(world: EvalWorld, n_episodes: int, seed: int) -> list:
     rng = np.random.default_rng(seed)
-    env = gym.make("EvalEnv-v0", robot_path=world.world_file,
-                   max_episode_steps=MAX_STEPS)
+    env = gym.make(
+        "EvalEnv-v0", robot_path=world.world_file, max_episode_steps=MAX_STEPS
+    )
     rewards = []
 
     for ep in range(n_episodes):
         world.controller.reset_controller(batch_size=1)
-        obs, _ = env.reset(seed=int(rng.integers(0, 2 ** 31)))
+        obs, _ = env.reset(seed=int(rng.integers(0, 2**31)))
         total, done = 0.0, False
         while not done:
             ctrl_obs = world.sensor_fn(obs) if world.sensor_fn is not None else obs
@@ -121,8 +126,13 @@ def run_episodes(world: EvalWorld, n_episodes: int, seed: int) -> list:
 def record_video(world: EvalWorld, out_path: str, seed: int) -> None:
     try:
         import imageio
-        env = gym.make("EvalEnv-v0", robot_path=world.world_file,
-                       render_mode="rgb_array", max_episode_steps=MAX_STEPS)
+
+        env = gym.make(
+            "EvalEnv-v0",
+            robot_path=world.world_file,
+            render_mode="rgb_array",
+            max_episode_steps=MAX_STEPS,
+        )
         world.controller.reset_controller(batch_size=1)
         obs, _ = env.reset(seed=seed)
         frames = []
@@ -149,10 +159,14 @@ def save_score(world: EvalWorld, rewards: list, output_dir: str) -> None:
         f.write("=" * 60 + "\n")
         f.write("MICRO-515 Final Project — Evaluation Results\n")
         f.write("=" * 60 + "\n\n")
-        f.write(f"Controller : {type(world.controller).__name__}"
-                f"  ({world.controller.n_params} params)\n")
-        f.write(f"Genotype   : {world.n_params} params  "
-                f"(controller={world.n_weights}, body={world.n_body_params})\n")
+        f.write(
+            f"Controller : {type(world.controller).__name__}"
+            f"  ({world.controller.n_params} params)\n"
+        )
+        f.write(
+            f"Genotype   : {world.n_params} params  "
+            f"(controller={world.n_weights}, body={world.n_body_params})\n"
+        )
         f.write(f"Reward     : healthy_reward + x_position - ctrl_cost - cfrc_cost\n\n")
         f.write(f"Mean  : {arr.mean():.2f}\n")
         f.write(f"Std   : {arr.std():.2f}\n")
@@ -176,11 +190,25 @@ if __name__ == "__main__":
         default=None,
         metavar="DIR",
         help="Directory containing x_best.npy (and optionally AntRobot.xml). "
-             "Overrides the CHECKPOINT_DIR constant above.",
+        "Overrides the CHECKPOINT_DIR constant above.",
+    )
+    parser.add_argument(
+        "--episodes",
+        type=int,
+        default=N_EPISODES,
+        help="Number of evaluation episodes to run.",
+    )
+    parser.add_argument(
+        "--output_dir",
+        type=str,
+        default=OUTPUT_DIR,
+        help="Directory where the score file and video are saved.",
     )
     args = parser.parse_args()
 
-    checkpoint_dir = args.best_dir_path if args.best_dir_path is not None else CHECKPOINT_DIR
+    checkpoint_dir = (
+        args.best_dir_path if args.best_dir_path is not None else CHECKPOINT_DIR
+    )
 
     world = EvalWorld()
 
@@ -195,20 +223,24 @@ if __name__ == "__main__":
             raise FileNotFoundError(f"Genotype not found: {GENOTYPE_PATH}")
         world.update_robot_xml(ROBOT_XML_PATH)
         genotype = np.load(GENOTYPE_PATH, allow_pickle=True)
-        world.controller.geno2pheno(genotype[:world.n_weights])
+        world.controller.geno2pheno(genotype[: world.n_weights])
         print(f"Robot  : {ROBOT_XML_PATH}")
         print(f"Geno   : {GENOTYPE_PATH}  shape={genotype.shape}")
     else:
         # Option A (default): load everything from the checkpoint directory
         world.load_from_checkpoint(checkpoint_dir)
 
-    print(f"\nRunning {N_EPISODES} episodes on the evaluation terrain  (seed={SEED}) …")
-    rewards = run_episodes(world, N_EPISODES, SEED)
+    print(
+        f"\nRunning {args.episodes} episodes on the evaluation terrain  (seed={SEED}) …"
+    )
+    rewards = run_episodes(world, args.episodes, SEED)
 
     arr = np.asarray(rewards, dtype=float)
-    print(f"\nResults: mean={arr.mean():.2f} ± {arr.std():.2f}  "
-          f"best={arr.max():.2f}  worst={arr.min():.2f}")
+    print(
+        f"\nResults: mean={arr.mean():.2f} ± {arr.std():.2f}  "
+        f"best={arr.max():.2f}  worst={arr.min():.2f}"
+    )
 
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    save_score(world, rewards, OUTPUT_DIR)
-    record_video(world, os.path.join(OUTPUT_DIR, "evaluation_video.mp4"), SEED)
+    os.makedirs(args.output_dir, exist_ok=True)
+    save_score(world, rewards, args.output_dir)
+    record_video(world, os.path.join(args.output_dir, "evaluation_video.mp4"), SEED)
