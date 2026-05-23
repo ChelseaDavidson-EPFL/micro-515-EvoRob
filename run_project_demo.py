@@ -118,6 +118,7 @@ def main():
     def _loop():
         nonlocal obs
         if obs is not None:
+            world._set_controller_navigation_feedback(env)
             action = world.controller.get_action(obs)
             if action.ndim > 1:
                 action = action.squeeze(0)

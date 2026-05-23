@@ -76,6 +76,15 @@ MY_CONTROLLER = CPGController(
     max_dfreq=np.pi,
     dt=0.05,
     inter_con_density=0.5,
+    pid_enabled=True,
+    pid_kp_y=0.25,
+    pid_ki_y=0.0,
+    pid_kd_y=0.03,
+    pid_kp_heading=0.35,
+    pid_ki_heading=0.0,
+    pid_kd_heading=0.04,
+    pid_steer_limit=0.25,
+    pid_steer_sign=1.0,
 )
 
 # --- Paths ---
@@ -103,6 +112,32 @@ def _neutral_reward(info: dict) -> float:
         - float(info.get("ctrl_cost", 0.0))
         - float(info.get("cfrc_cost", 0.0))
     )
+
+
+def _extract_navigation_feedback(env) -> tuple[float, float]:
+    """Read lateral position and yaw directly from MuJoCo."""
+    unwrapped = env.unwrapped
+    data = unwrapped.data
+    try:
+        y_position = float(data.body(1).xpos[1])
+        R = data.body(1).xmat.reshape(3, 3)
+        heading = float(np.arctan2(R[1, 0], R[0, 0]))
+    except Exception:
+        y_position = float(data.qpos[1])
+        quat = data.qpos[3:7]
+        w, x, y, z = quat
+        siny_cosp = 2.0 * (w * z + x * y)
+        cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+        heading = float(np.arctan2(siny_cosp, cosy_cosp))
+    return y_position, heading
+
+
+def _set_controller_navigation_feedback(controller, env) -> None:
+    setter = getattr(controller, "set_navigation_feedback", None)
+    if setter is None:
+        return
+    y_position, heading = _extract_navigation_feedback(env)
+    setter(y_position, heading)
 
 
 def _write_video(out_path: str, frames: list[np.ndarray], fps: int = 20) -> None:
@@ -198,6 +233,7 @@ def run_episodes(world: EvalWorld, n_episodes: int, seed: int) -> list:
         total, done = 0.0, False
         while not done:
             ctrl_obs = world.sensor_fn(obs) if world.sensor_fn is not None else obs
+            _set_controller_navigation_feedback(world.controller, env)
             action = world.controller.get_action(ctrl_obs)
             if action.ndim > 1:
                 action = action.squeeze(0)
@@ -228,6 +264,7 @@ def record_video(world: EvalWorld, out_path: str, seed: int) -> None:
                 frame = frame[0]
             frames.append(np.ascontiguousarray(np.asarray(frame)))
             ctrl_obs = world.sensor_fn(obs) if world.sensor_fn is not None else obs
+            _set_controller_navigation_feedback(world.controller, env)
             action = world.controller.get_action(ctrl_obs)
             if action.ndim > 1:
                 action = action.squeeze(0)

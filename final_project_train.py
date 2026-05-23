@@ -54,6 +54,15 @@ from evorob.world.base import World
 from evorob.world.robot.morphology.ant_custom_robot import AntRobot
 
 ROOT_DIR = get_project_root()
+PID_ENABLED = True
+PID_KP_Y = 0.25
+PID_KI_Y = 0.0
+PID_KD_Y = 0.03
+PID_KP_HEADING = 0.35
+PID_KI_HEADING = 0.0
+PID_KD_HEADING = 0.04
+PID_STEER_LIMIT = 0.25
+PID_STEER_SIGN = 1.0
 _ASSETS = join(ROOT_DIR, "evorob", "world", "robot", "assets")
 MAX_EPISODE_STEPS = 1000  # fixed for leaderboard — do not change
 
@@ -96,6 +105,15 @@ class FinalWorld(World):
             max_dfreq=np.pi,
             dt=0.05,
             inter_con_density=0.5,
+            pid_enabled=PID_ENABLED,
+            pid_kp_y=PID_KP_Y,
+            pid_ki_y=PID_KI_Y,
+            pid_kd_y=PID_KD_Y,
+            pid_kp_heading=PID_KP_HEADING,
+            pid_ki_heading=PID_KI_HEADING,
+            pid_kd_heading=PID_KD_HEADING,
+            pid_steer_limit=PID_STEER_LIMIT,
+            pid_steer_sign=PID_STEER_SIGN,
         )
 
         self.n_weights = self.controller.n_params
@@ -331,6 +349,7 @@ class FinalWorld(World):
         done = np.zeros(n_repeats, dtype=bool)
 
         for t in range(n_steps):
+            self._set_controller_navigation_feedback(envs, active_mask=~done)
             actions = np.where(done[:, None], 0, self.controller.get_action(obs))
             obs, r, terminated, truncated, info_dict = envs.step(actions)
             rewards[t, ~done] = r[~done]
@@ -364,6 +383,44 @@ class FinalWorld(World):
             robot_path=self.hill_world_file,
             render_mode=render_mode,
             **kwargs,
+        )
+
+    def _extract_navigation_feedback(self, env) -> tuple[float, float]:
+        """Read lateral position and yaw directly from MuJoCo."""
+        unwrapped = env.unwrapped
+        data = unwrapped.data
+        try:
+            y_position = float(data.body(1).xpos[1])
+            R = data.body(1).xmat.reshape(3, 3)
+            heading = float(np.arctan2(R[1, 0], R[0, 0]))
+        except Exception:
+            y_position = float(data.qpos[1])
+            quat = data.qpos[3:7]
+            w, x, y, z = quat
+            siny_cosp = 2.0 * (w * z + x * y)
+            cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+            heading = float(np.arctan2(siny_cosp, cosy_cosp))
+        return y_position, heading
+
+    def _set_controller_navigation_feedback(
+        self, env_or_envs, active_mask: np.ndarray | None = None
+    ) -> None:
+        setter = getattr(self.controller, "set_navigation_feedback", None)
+        if setter is None:
+            return
+
+        envs = getattr(env_or_envs, "envs", None)
+        if envs is None:
+            y_position, heading = self._extract_navigation_feedback(env_or_envs)
+            setter(y_position, heading, active_mask=active_mask)
+            return
+
+        feedback = [self._extract_navigation_feedback(env) for env in envs]
+        y_positions, headings = zip(*feedback)
+        setter(
+            np.asarray(y_positions, dtype=float),
+            np.asarray(headings, dtype=float),
+            active_mask=active_mask,
         )
 
     # ------------------------------------------------------------------
@@ -467,6 +524,7 @@ def evaluate_checkpoint(
             obs, _ = env.reset(seed=int(rng.integers(0, 2**31)))
             total, done = 0.0, False
             while not done:
+                world._set_controller_navigation_feedback(env)
                 action = world.controller.get_action(obs)
                 if action.ndim > 1:
                     action = action.squeeze(0)
@@ -492,6 +550,7 @@ def evaluate_checkpoint(
             frames = []
             for _ in range(MAX_STEPS):
                 frames.append(env.render())
+                world._set_controller_navigation_feedback(env)
                 action = world.controller.get_action(obs)
                 if action.ndim > 1:
                     action = action.squeeze(0)

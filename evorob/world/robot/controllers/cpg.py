@@ -49,6 +49,11 @@ def _rk4(state: np.ndarray, A: np.ndarray, dt: float) -> np.ndarray:
     return state + (dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
 
 
+def _wrap_angle(angle: np.ndarray) -> np.ndarray:
+    """Wrap angles to [-pi, pi]."""
+    return (angle + np.pi) % (2.0 * np.pi) - np.pi
+
+
 # ---------------------------------------------------------------------------
 # CPG + MLP controller
 # ---------------------------------------------------------------------------
@@ -81,6 +86,20 @@ class CPGController(Controller):
         max_dfreq: float = np.pi,
         dt: float = 0.05,
         inter_con_density: float = 0.5,
+        pid_enabled: bool = False,
+        pid_target_y: float = 0.0,
+        pid_target_heading: float = 0.0,
+        pid_kp_y: float = 0.0,
+        pid_ki_y: float = 0.0,
+        pid_kd_y: float = 0.0,
+        pid_kp_heading: float = 0.0,
+        pid_ki_heading: float = 0.0,
+        pid_kd_heading: float = 0.0,
+        pid_integral_limit: float = 1.0,
+        pid_steer_limit: float = 0.25,
+        pid_steer_sign: float = 1.0,
+        pid_left_hip_indices: tuple[int, ...] = (2, 6),
+        pid_right_hip_indices: tuple[int, ...] = (0, 4),
     ):
         self.n_input      = input_size
         self.n_output     = output_size
@@ -128,6 +147,30 @@ class CPGController(Controller):
 
         # Base frequency vector applied along super-diagonal
         self._omega = np.ones(output_size) * base_freq
+
+        # Non-evolved PID steering, applied after the CPG output.
+        self.pid_enabled = pid_enabled
+        self.pid_target_y = pid_target_y
+        self.pid_target_heading = pid_target_heading
+        self.pid_kp_y = pid_kp_y
+        self.pid_ki_y = pid_ki_y
+        self.pid_kd_y = pid_kd_y
+        self.pid_kp_heading = pid_kp_heading
+        self.pid_ki_heading = pid_ki_heading
+        self.pid_kd_heading = pid_kd_heading
+        self.pid_integral_limit = pid_integral_limit
+        self.pid_steer_limit = pid_steer_limit
+        self.pid_steer_sign = pid_steer_sign
+        self.pid_left_hip_indices = np.asarray(pid_left_hip_indices, dtype=int)
+        self.pid_right_hip_indices = np.asarray(pid_right_hip_indices, dtype=int)
+
+        self._pid_y = None
+        self._pid_heading = None
+        self._pid_active_mask = None
+        self._pid_y_integral = None
+        self._pid_heading_integral = None
+        self._pid_prev_y_error = None
+        self._pid_prev_heading_error = None
 
     # ------------------------------------------------------------------
     # SO2 topology initialisation  (fixed random structure, seed=42)
@@ -195,6 +238,27 @@ class CPGController(Controller):
     def reset_controller(self, batch_size: int = 1) -> None:
         """Reset oscillator state for a new batch of episodes."""
         self._y = np.tile(self._template_state, (1, batch_size))   # (2J, B)
+        self._pid_y = None
+        self._pid_heading = None
+        self._pid_active_mask = None
+        self._pid_y_integral = np.zeros(batch_size, dtype=float)
+        self._pid_heading_integral = np.zeros(batch_size, dtype=float)
+        self._pid_prev_y_error = None
+        self._pid_prev_heading_error = None
+
+    def set_navigation_feedback(
+        self,
+        y_position: np.ndarray | float,
+        heading: np.ndarray | float,
+        active_mask: np.ndarray | None = None,
+    ) -> None:
+        """Inject pose feedback for PID without changing the observation vector."""
+        self._pid_y = np.asarray(y_position, dtype=float).reshape(-1)
+        self._pid_heading = np.asarray(heading, dtype=float).reshape(-1)
+        if active_mask is None:
+            self._pid_active_mask = None
+        else:
+            self._pid_active_mask = np.asarray(active_mask, dtype=bool).reshape(-1)
 
     def get_action(self, obs: np.ndarray) -> np.ndarray:
         """
@@ -248,5 +312,86 @@ class CPGController(Controller):
         # ------------------------------------------------------------------
         sine_components = np.tanh(next_y[0::2, :]).T    # (B, J)
         actions = gain * sine_components                  # (B, J)
+        actions = self._apply_pid_steering(actions, batch)
 
         return actions.squeeze(0) if squeeze else actions
+
+    def _apply_pid_steering(self, actions: np.ndarray, batch: int) -> np.ndarray:
+        if (
+            not self.pid_enabled
+            or self._pid_y is None
+            or self._pid_heading is None
+            or self._pid_y.size != batch
+            or self._pid_heading.size != batch
+        ):
+            return actions
+
+        if self._pid_y_integral is None or self._pid_y_integral.size != batch:
+            self._pid_y_integral = np.zeros(batch, dtype=float)
+            self._pid_heading_integral = np.zeros(batch, dtype=float)
+            self._pid_prev_y_error = None
+            self._pid_prev_heading_error = None
+
+        active = (
+            np.ones(batch, dtype=bool)
+            if self._pid_active_mask is None or self._pid_active_mask.size != batch
+            else self._pid_active_mask
+        )
+
+        y_error = self.pid_target_y - self._pid_y
+        heading_error = _wrap_angle(self.pid_target_heading - self._pid_heading)
+
+        self._pid_y_integral[active] += y_error[active] * self.dt
+        self._pid_heading_integral[active] += heading_error[active] * self.dt
+        self._pid_y_integral = np.clip(
+            self._pid_y_integral, -self.pid_integral_limit, self.pid_integral_limit
+        )
+        self._pid_heading_integral = np.clip(
+            self._pid_heading_integral,
+            -self.pid_integral_limit,
+            self.pid_integral_limit,
+        )
+
+        if self._pid_prev_y_error is None:
+            y_derivative = np.zeros(batch, dtype=float)
+        else:
+            y_derivative = (y_error - self._pid_prev_y_error) / self.dt
+
+        if self._pid_prev_heading_error is None:
+            heading_derivative = np.zeros(batch, dtype=float)
+        else:
+            heading_derivative = _wrap_angle(
+                heading_error - self._pid_prev_heading_error
+            ) / self.dt
+
+        self._pid_prev_y_error = y_error.copy()
+        self._pid_prev_heading_error = heading_error.copy()
+
+        steer = (
+            self.pid_kp_y * y_error
+            + self.pid_ki_y * self._pid_y_integral
+            + self.pid_kd_y * y_derivative
+            + self.pid_kp_heading * heading_error
+            + self.pid_ki_heading * self._pid_heading_integral
+            + self.pid_kd_heading * heading_derivative
+        )
+        steer = np.clip(
+            steer * self.pid_steer_sign,
+            -self.pid_steer_limit,
+            self.pid_steer_limit,
+        )
+        steer[~active] = 0.0
+
+        left = self.pid_left_hip_indices[
+            (0 <= self.pid_left_hip_indices)
+            & (self.pid_left_hip_indices < self.n_joints)
+        ]
+        right = self.pid_right_hip_indices[
+            (0 <= self.pid_right_hip_indices)
+            & (self.pid_right_hip_indices < self.n_joints)
+        ]
+        if left.size:
+            actions[:, left] += steer[:, None]
+        if right.size:
+            actions[:, right] -= steer[:, None]
+        return np.clip(actions, -1.0, 1.0)
