@@ -723,7 +723,9 @@ def run_multi_task_evolution(
 
     n_workers = max(1, os.cpu_count() - 1)
     print(f"Parallel workers : {n_workers}  (of {os.cpu_count()} logical cores)")
-    with Pool(processes=n_workers, initializer=_init_worker) as pool:
+    print("Press Ctrl-C once to stop early and save the best result so far.")
+    try:
+      with Pool(processes=n_workers, initializer=_init_worker) as pool:
         for gen in range(num_generations):
             pop = ea.ask()
             results = pool.starmap(
@@ -743,6 +745,9 @@ def run_multi_task_evolution(
             ea.tell(pop, fitnesses, save_checkpoint=save_ckpt)
             if save_ckpt:
                 shutil.copy2(_best_xml_stage, join(results_dir, str(gen), "Robot.xml"))
+
+    except KeyboardInterrupt:
+        print("\nTraining interrupted — worker processes terminated.")
 
     # ------------------------------------------------------------------
     # Save the best generalist (highest min-objective in final population)
@@ -837,7 +842,9 @@ def run_cmaes_refinement(
 
     n_workers = max(1, os.cpu_count() - 1)
     print(f"Parallel workers : {n_workers}  (of {os.cpu_count()} logical cores)")
-    with Pool(processes=n_workers, initializer=_init_worker) as pool:
+    print("Press Ctrl-C once to stop early and save the best result so far.")
+    try:
+      with Pool(processes=n_workers, initializer=_init_worker) as pool:
         for gen in range(num_generations):
             pop = ea.ask()                              # (popsize, n_params)
             results = pool.starmap(
@@ -864,6 +871,9 @@ def run_cmaes_refinement(
                     f"Gen {gen:4d}  best={ea.f_best_so_far:.2f}"
                     f"  mean={fitnesses.mean():.2f} ± {fitnesses.std():.2f}"
                 )
+
+    except KeyboardInterrupt:
+        print("\nTraining interrupted — worker processes terminated.")
 
     print(f"\nCMA-ES refinement complete.  Best min-score: {ea.f_best_so_far:.2f}")
 
