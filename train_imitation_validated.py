@@ -2,34 +2,9 @@
 train_imitation_validated.py
 ============================
 Imitates the behaviour of a fine-tuned Cartesian expert controller using
-CMA-ES to find CPG weights that minimise MSE against the expert trajectory.
+CMA-ES to find SO2 coupling weights that minimise MSE against the expert trajectory.
 
 The resulting weights are saved as a warm-start seed for evolutionary training.
-
-Key design decisions
---------------------
-* The PID steering layer in CPGController is DISABLED during imitation.
-  The PID is a non-evolved post-processor applied at runtime; it should not
-  be baked into the imitated weights.  Evolution will benefit from a seed
-  that captures the gait rhythm, not one that compensates for drift in a
-  way that conflicts with the evolved MLP modulation.
-
-* The expert trajectory is generated on IceEnv-v0 to maximise the challenge
-  of imitation — ice demands more precise foot placement, so weights that
-  match the expert on ice generalise well to flat and hill too.
-
-* Only the controller weights (world.n_weights) are optimised here.
-  Body params are fixed to the default (genotype=0 → 0.45 m segments).
-  The full genotype [weights | body] is assembled at the end for use as
-  a CMA-ES seed in final_project_train.py.
-
-Usage
------
-    python train_imitation_validated.py
-
-Output
-------
-    validated_seed.npy   — full genotype ready for --seed_path
 """
 
 import os
@@ -60,10 +35,8 @@ def main():
     # ------------------------------------------------------------------
     world = FinalWorld()
 
-    # Confirm the controller has PID disabled.
-    # CPGController accepts pid_enabled in its constructor; FinalWorld sets it.
-    # We defensively force it off here so imitation is never contaminated by
-    # PID corrections regardless of how FinalWorld.__init__ is configured.
+    # Defensively force PID off so imitation is never contaminated by
+    # lateral corrections. The EA only needs to learn the forward gait.
     if hasattr(world.controller, "pid_enabled"):
         world.controller.pid_enabled = False
         print("PID steering disabled for imitation run.")
@@ -73,16 +46,14 @@ def main():
     print(f"n_params   : {world.n_params}   (controller + body)")
     print(f"n_body     : {world.n_body_params}")
 
-    # Genotype layout sanity check
+    # Genotype layout mapping for pure SO2
     ctrl = world.controller
-    n_mlp      = ctrl._n_mlp
     n_coupling = ctrl._n_so2_coupling
     n_phase    = ctrl._n_so2_phase
     print(f"\nGenotype breakdown:")
-    print(f"  MLP weights      : {n_mlp}")
     print(f"  SO2 couplings    : {n_coupling}  (fixed bilaterally symmetric topology)")
     print(f"  SO2 phases       : {n_phase}")
-    print(f"  Total controller : {n_mlp + n_coupling + n_phase}  (== n_weights: {world.n_weights})")
+    print(f"  Total controller : {n_coupling + n_phase}  (== n_weights: {world.n_weights})")
 
     # Default body params — genotype=0 maps to midpoint of body range
     default_body = np.zeros(world.n_body_params)
@@ -100,31 +71,25 @@ def main():
         max_episode_steps=n_steps_data,
     )
     obs, _ = env.reset()
-    n_obs     = int(obs.shape[0])
     n_actions = int(env.action_space.shape[0])
 
-    print(f"\nObservation dim : {n_obs}  (must match CPG input_size={ctrl.n_input})")
-    if n_obs != ctrl.n_input:
-        print(
-            f"WARNING: observation dim {n_obs} != controller input_size {ctrl.n_input}. "
-            "Check that _get_obs() in eval_ice.py matches the CPG's expected input."
-        )
-
-    print(f"Action dim      : {n_actions}")
     print(f"\nGenerating expert trajectory ({n_steps_data} steps)...")
 
     hip_polarities  = np.array([1.0, -1.0, -1.0,  1.0])
     knee_polarities = np.array([1.0, -1.0, -1.0,  1.0])
 
-    # Use the same dt as the CPG so timing is consistent
     dt       = world.controller.dt
     sim_time = 0.0
 
-    dataset_x = []   # observations
+    dataset_x = []   # observations (now strictly 2-dim)
     dataset_y = []   # expert actions
 
     for _ in range(n_steps_data):
         sim_time += dt * config["speed"] * 2 * math.pi
+
+        # --- THE FIX: Extract joint angles directly from MuJoCo ---
+        # qpos[0:3] = x,y,z | qpos[3:7] = quaternion | qpos[7:15] = the 8 joint angles
+        joint_positions = env.unwrapped.data.qpos[7:15]
 
         target_action = np.zeros(n_actions)
         for leg_i in range(4):
@@ -144,17 +109,13 @@ def main():
             target_hip   = hip_polarities[leg_i]  * foot_x + config["turn_offset"]
             target_knee  = knee_polarities[leg_i] * (config["ground_level"] - foot_z)
 
-            # PD control in Cartesian space — uses only the first 8 obs dims
-            # (joint positions, same as original script)
-            target_action[leg_i * 2]     = config["k_hip"]  * (target_hip  - obs[leg_i * 2])
-            target_action[leg_i * 2 + 1] = config["k_knee"] * (target_knee - obs[leg_i * 2 + 1])
+            # PD control now perfectly maps to the 8 physical joint positions
+            target_action[leg_i * 2]     = config["k_hip"]  * (target_hip  - joint_positions[leg_i * 2])
+            target_action[leg_i * 2 + 1] = config["k_knee"] * (target_knee - joint_positions[leg_i * 2 + 1])
 
         action = np.clip(target_action, -1.0, 1.0)
 
-        # Record (obs, action) pair — obs may be 32/34-dim with augmented signals,
-        # but the Cartesian expert only reads the first 8 joint positions.
-        # The CPG MLP will learn to use the full obs; we just need the action targets.
-        dataset_x.append(obs[:n_obs].copy())
+        dataset_x.append(obs.copy())
         dataset_y.append(action.copy())
 
         obs, _, terminated, truncated, _ = env.step(action)
@@ -163,12 +124,12 @@ def main():
 
     env.close()
 
-    dataset_x = np.array(dataset_x)   # (n_steps, n_obs)
-    dataset_y = np.array(dataset_y)   # (n_steps, n_actions)
+    dataset_x = np.array(dataset_x)   
+    dataset_y = np.array(dataset_y)   
     print(f"Expert dataset: x={dataset_x.shape}  y={dataset_y.shape}")
 
     # ------------------------------------------------------------------
-    # 4. CMA-ES imitation — minimise MSE between CPG and expert actions
+    # 4. CMA-ES imitation — minimise MSE between SO2 and expert actions
     # ------------------------------------------------------------------
     num_generations = 500
     population_size = 48
@@ -178,12 +139,12 @@ def main():
         population_size=population_size,
         num_generations=num_generations,
         sigma=0.3,
-        bounds=(-1, 1),
+        bounds=(-1, 1), # Matched to your FinalWorld bounds to prevent clipping shocks
     )
 
     print(f"\nMinimising MSE over {n_steps_data} steps "
           f"({num_generations} gens × pop {population_size})...")
-    print("Note: PID is disabled — imitated weights capture gait only.\n")
+    print("Note: PID is disabled — imitated weights capture pure open-loop gait only.\n")
 
     best_weights  = None
     best_fitness  = -np.inf
@@ -193,14 +154,14 @@ def main():
         fitnesses = []
 
         for genotype in pop:
-            # Load controller weights — PID stays disabled
             world.controller.geno2pheno(genotype)
             world.controller.reset_controller(batch_size=1)
 
-            # Sequentially evaluate to respect CPG oscillator state across steps
             errors = []
             for x, y_true in zip(dataset_x, dataset_y):
-                y_pred = world.controller.get_action(x)   # (8,) — PID off, pure CPG
+                # get_action processes the 2-dim 'x' without crashing, 
+                # but ignores it for the pure rhythmic step
+                y_pred = world.controller.get_action(x)   
                 errors.append(np.square(y_pred - y_true))
 
             mse = float(np.mean(errors))
