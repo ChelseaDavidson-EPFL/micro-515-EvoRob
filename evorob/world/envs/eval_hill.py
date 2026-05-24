@@ -57,6 +57,7 @@ class EvalHillEnv(MujocoEnv, utils.EzPickle):
         self._reset_noise_scale = reset_noise_scale
         self._stuck_count = 0
         self._prev_x = 0.0
+        self._step_count = 0
 
         MujocoEnv.__init__(
             self,
@@ -78,8 +79,6 @@ class EvalHillEnv(MujocoEnv, utils.EzPickle):
         )
 
     def step(self, action):
-        self._step_count += 1  # Increment step counter
-
         xyz_before = self.data.body(1).xpos[:3].copy()
         y_before = float(xyz_before[1])
         self.do_simulation(action, self.frame_skip)
@@ -95,39 +94,36 @@ class EvalHillEnv(MujocoEnv, utils.EzPickle):
         cfrc_cost = float(np.sum(self.data.cfrc_ext[1:] ** 2) * self._cfrc_cost_weight)
         terminated = self._is_terminated(xyz_velocity)
 
-        #"Move or Die" Forward Progress
-        forward_bonus = min(max(x_velocity, 0), 1.5) * 10.0
-        still_penalty = -5.0 if x_velocity < 0.1 else 0
-        lateral_penalty = -(abs(y_after - y_before) / self.dt) * 5.0
-        y_displacement_penalty = -abs(y_after) * 3.0
+        # Forward progress: cap at 1.5 m/s to prevent jump exploitation.
+        # No binary still_penalty — forward_bonus's own gradient handles this.
+        # A binary threshold creates a "just-wiggle-enough" local minimum.
+        forward_bonus = min(max(x_velocity, 0), 1.5) * 4.0
         backward_penalty = -abs(min(x_velocity, 0)) * 3.0
 
-        # Heading: reward torso facing +x
-        R = self.data.body(1).xmat.reshape(3, 3)
-        heading_reward = float(R[:, 0][0]) * 0.5
+        # Lateral control: penalise both sideways drift and off-centre position
+        lateral_penalty = -(abs(y_after - y_before) / self.dt) * 2.0
+        y_displacement_penalty = -abs(y_after) * 2.0
 
-        # Reward Active Climbing
+        # Heading: strong signal — misalignment on a hill compounds into a fall
+        R = self.data.body(1).xmat.reshape(3, 3)
+        heading_reward = float(R[:, 0][0]) * 2.0
+
+        # Vertical: reward climbing, penalise falling, ignore normal gait noise.
+        # Clip keeps this a small secondary signal, not the primary objective.
         z_velocity = float(xyz_velocity[2])
-        z_elevation_bonus = max(z_velocity, 0) * 20.0  # Massive reward for moving up
+        vertical_reward = float(np.clip(z_velocity, -0.5, 0.5)) * 1.0
 
         reward = (
             healthy_reward
             + forward_bonus
-            + still_penalty
+            + backward_penalty
             + lateral_penalty
             + y_displacement_penalty
-            + backward_penalty
             + heading_reward
-            + z_elevation_bonus
-            - ctrl_cost * 0.1
-            - cfrc_cost * 0.1
+            + vertical_reward
+            - ctrl_cost
+            - cfrc_cost
         )
-
-        # Sparse Terminal Reward
-        # If the robot survived the full 300 steps, grant a massive payout for its absolute altitude
-        # (Change 300 to match the n_steps used in final_project_train.py)
-        if not terminated and self._step_count >= 300:
-            reward += float(xyz_after[2]) * 50.0
 
         self._prev_x = x_position
 
@@ -148,6 +144,9 @@ class EvalHillEnv(MujocoEnv, utils.EzPickle):
         if np.any(np.isnan(qacc) | np.isinf(qacc) | (np.abs(qacc) > 1e6)):
             return True
         if self._torso_upside_down():
+            return True
+        # Off the side of the terrain (same bound as flat/ice envs)
+        if abs(float(self.data.body(1).xpos[1])) > 2.0:
             return True
         if np.linalg.norm(xyz_velocity) < 1e-2:
             self._stuck_count += 1

@@ -93,34 +93,34 @@ class EvalIceEnv(MujocoEnv, utils.EzPickle):
         cfrc_cost = float(np.sum(self.data.cfrc_ext[1:] ** 2) * self._cfrc_cost_weight)
         terminated = self._is_terminated()
 
-        # 1. Cap the forward bonus at 1.5 m/s to prevent explosive jumping
-        forward_bonus = min(max(x_velocity, 0), 1.5) * 10.0
-        
-        # 2. Keep the strict still penalty so it doesn't revert to standing
-        still_penalty = -5.0 if x_velocity < 0.1 else 0
-        
+        # Forward progress: cap at 1.5 m/s to prevent jump exploitation.
+        # No binary still_penalty — the forward_bonus gradient handles this
+        # continuously and avoids the "just-wiggle-enough" local minimum.
+        forward_bonus = min(max(x_velocity, 0), 1.5) * 4.0
+        backward_penalty = -abs(min(x_velocity, 0)) * 3.0
+
+        # Slightly tighter lateral penalties than flat: on ice, sideways drift
+        # compounds quickly into a spin that the robot can't recover from.
+        lateral_penalty = -y_drift * 3.0
         y_displacement_penalty = -abs(y_after) * 3.0
-        lateral_penalty = -y_drift * 5.0 
-        backward_penalty = -abs(min(x_velocity, 0)) * 3.0 
 
         R = self.data.body(1).xmat.reshape(3, 3)
-        heading_reward = float(R[:, 0][0]) * 1.0
-        
-        # 3. Add a strict penalty for bouncing/jumping (vertical velocity)
+        heading_reward = float(R[:, 0][0]) * 2.0
+
+        # Mild vertical penalty: allows normal gait bobbing but deters jumping
         z_velocity = float(self.data.qvel.flat[2])
-        vertical_penalty = -abs(z_velocity) * 5.0
+        vertical_penalty = -abs(z_velocity) * 2.0
 
         reward = (
             healthy_reward
             + forward_bonus
-            + still_penalty
+            + backward_penalty
             + lateral_penalty
             + y_displacement_penalty
-            + backward_penalty
             + heading_reward
             + vertical_penalty
-            - ctrl_cost * 0.1
-            - cfrc_cost * 0.1
+            - ctrl_cost
+            - cfrc_cost
         )
 
         info = {
