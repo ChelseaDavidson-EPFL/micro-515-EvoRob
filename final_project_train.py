@@ -7,8 +7,9 @@ neural controller weights and the body morphology (leg lengths).
 
 Changes from default skeleton
 ------------------------------
-* Controller  : CPGController  — SO2 oscillator modulated per-step by a small
-                MLP that reads proprioceptive feedback (closed-loop CPG).
+* Controller  : SO2WithPIDController — open-loop SO2 oscillator that generates
+                a rhythmic gait, with a fixed (non-evolved) PID layer that
+                corrects lateral drift and heading error at runtime.
 * Body params : 2 params  [upper_len, lower_len] shared across all 4 legs
                 (bilateral + front-back symmetry).  Switch to 4 params
                 (per-leg-pair) by setting N_BODY_PARAMS = 4 below.
@@ -55,9 +56,10 @@ from evorob.algorithms.nsga import NSGAII
 from evorob.algorithms.ea_api import CMAESAPI
 from evorob.utils.filesys import get_last_checkpoint_dir, get_project_root
 
-# ── swap this import to go back to the default MLP ──────────────────────────
-from evorob.world.robot.controllers.cpg import CPGController
+# ── controller selection ─────────────────────────────────────────────────────
+from evorob.world.robot.controllers.so2_pid import SO2WithPIDController
 
+# from evorob.world.robot.controllers.cpg import CPGController
 # from evorob.world.robot.controllers.mlp import NeuralNetworkController
 # ────────────────────────────────────────────────────────────────────────────
 
@@ -130,11 +132,11 @@ class FinalWorld(World):
 
     Genotype layout
     ---------------
-    [ CPG params  (n_weights) | body params (N_BODY_PARAMS) ]
+    [ SO2 coupling weights | SO2 initial phases | body params (N_BODY_PARAMS) ]
 
-    CPG params are scaled by 0.1 before being passed to geno2pheno.
-    Body params are mapped to leg-segment lengths via  (g+1)/4 + 0.1,
-    giving lengths in [0.1, 0.6] m.
+    The SO2 controller is open-loop — no MLP, no sensor input.
+    Body params are mapped to leg-segment lengths via 0.2 + (g+1)/4,
+    giving lengths in [0.2, 0.7] m.
     """
 
     def __init__(self):
@@ -142,12 +144,9 @@ class FinalWorld(World):
         # Controller - Choose your controller — swap for your own MLP, SO2Controller, Hebbian, or custom.
         #              Whatever you choose determines self.n_weights (controller parameter count).
         # ------------------------------------------------------------------
-        self.controller = CPGController(
-            input_size=32,
+        self.controller = SO2WithPIDController(
+            input_size=2,
             output_size=8,
-            hidden_size=8,
-            base_freq=2 * np.pi,
-            max_dfreq=np.pi,
             dt=0.05,
             inter_con_density=0.5,
             pid_enabled=PID_ENABLED,
@@ -158,7 +157,6 @@ class FinalWorld(World):
             pid_ki_heading=PID_KI_HEADING,
             pid_kd_heading=PID_KD_HEADING,
             pid_steer_limit=PID_STEER_LIMIT,
-            pid_steer_sign=PID_STEER_SIGN,
         )
 
         self.n_weights = self.controller.n_params
@@ -238,6 +236,7 @@ class FinalWorld(World):
         # MAPPING FOR BOUNDS [-1, 1]:
         # should be (0.2, 0.7)
         body_raw = 0.2 + (genotype[self.n_weights :] + 1) / 4  # scale to [0.2, 0.7] m
+        body_raw = np.clip(body_raw, 0.1, 0.8)
 
         self.controller.geno2pheno(control_params)
 
@@ -423,43 +422,6 @@ class FinalWorld(World):
             **kwargs,
         )
 
-    def _extract_navigation_feedback(self, env) -> tuple[float, float]:
-        """Read lateral position and yaw directly from MuJoCo."""
-        unwrapped = env.unwrapped
-        data = unwrapped.data
-        try:
-            y_position = float(data.body(1).xpos[1])
-            R = data.body(1).xmat.reshape(3, 3)
-            heading = float(np.arctan2(R[1, 0], R[0, 0]))
-        except Exception:
-            y_position = float(data.qpos[1])
-            quat = data.qpos[3:7]
-            w, x, y, z = quat
-            siny_cosp = 2.0 * (w * z + x * y)
-            cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
-            heading = float(np.arctan2(siny_cosp, cosy_cosp))
-        return y_position, heading
-
-    def _set_controller_navigation_feedback(
-        self, env_or_envs, active_mask: np.ndarray | None = None
-    ) -> None:
-        setter = getattr(self.controller, "set_navigation_feedback", None)
-        if setter is None:
-            return
-
-        envs = getattr(env_or_envs, "envs", None)
-        if envs is None:
-            y_position, heading = self._extract_navigation_feedback(env_or_envs)
-            setter(y_position, heading, active_mask=active_mask)
-            return
-
-        feedback = [self._extract_navigation_feedback(env) for env in envs]
-        y_positions, headings = zip(*feedback)
-        setter(
-            np.asarray(y_positions, dtype=float),
-            np.asarray(headings, dtype=float),
-            active_mask=active_mask,
-        )
 
     # ------------------------------------------------------------------
     # Combined fitness
@@ -562,7 +524,6 @@ def evaluate_checkpoint(
             obs, _ = env.reset(seed=int(rng.integers(0, 2**31)))
             total, done = 0.0, False
             while not done:
-                world._set_controller_navigation_feedback(env)
                 action = world.controller.get_action(obs)
                 if action.ndim > 1:
                     action = action.squeeze(0)
@@ -588,7 +549,6 @@ def evaluate_checkpoint(
             frames = []
             for _ in range(MAX_STEPS):
                 frames.append(env.render())
-                world._set_controller_navigation_feedback(env)
                 action = world.controller.get_action(obs)
                 if action.ndim > 1:
                     action = action.squeeze(0)
@@ -873,7 +833,7 @@ def run_cmaes_refinement(
                 [(g, n_repeats, n_steps) for g in pop],
             )
             f3_arr    = np.array(results)               # (pop_size, 3)
-            weights   = np.array([1.0, 1.0, 1.0])      # flat, ice, hill — upweight hill
+            weights   = np.array([1.0, 1.0, 1.0])      # flat, ice, hill — hill already upweighted through reward shaping
             fitnesses = (f3_arr * weights).sum(axis=1)  # weighted-sum scalarisation
 
             best_idx = int(np.argmax(fitnesses))
@@ -931,7 +891,7 @@ if __name__ == "__main__":
                 population_size=64,
                 sigma=0.2,
                 n_repeats=2,
-                n_steps=300,
+                n_steps=300, # CHECK EVAL HILL MATCHES THIS
                 ckpt_interval=5,
                 results_dir=args.results_dir,
             )
@@ -943,7 +903,7 @@ if __name__ == "__main__":
                 sigma=0.5,  # large sigma for cold start: rule-of-thumb = range/4 = 2/4
                 bounds=(-1, 1),
                 n_repeats=4,  # 4 repeats: CMA-ES is more noise-sensitive than NSGA-II
-                n_steps=500,
+                n_steps=500, # CHECK EVAL HILL MATCHES THIS
                 ckpt_interval=10,
                 results_dir=args.results_dir,
             )
@@ -953,7 +913,7 @@ if __name__ == "__main__":
             population_size=96,  # Increased to better explore Pareto front
             n_parents=48,  # 50% selection pressure
             n_repeats=2,  # Use 1 repeat during training for speed
-            n_steps=400,  # 400 steps is enough to evaluate speed
+            n_steps=400,  # 400 steps is enough to evaluate speed - !!!! CHECK EVAL HILL MATCHES THIS!!!!
             mutation_prob=0.5,  # was 0.3 — more exploration to find hill gait
             crossover_prob=0.3,  # was 0.5 — less crossover, more mutation for diversity
             ckpt_interval=5,  # Save less often to reduce disk I/O

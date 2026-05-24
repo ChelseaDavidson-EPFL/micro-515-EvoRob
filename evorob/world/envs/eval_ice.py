@@ -104,7 +104,7 @@ class EvalIceEnv(MujocoEnv, utils.EzPickle):
         backward_penalty = -abs(min(x_velocity, 0)) * 3.0 
 
         R = self.data.body(1).xmat.reshape(3, 3)
-        heading_reward = float(R[:, 0][0]) * 1.0
+        heading_reward = float(R[:, 0][0]) * 0.5
         
         # 3. Add a strict penalty for bouncing/jumping (vertical velocity)
         z_velocity = float(self.data.qvel.flat[2])
@@ -149,13 +149,13 @@ class EvalIceEnv(MujocoEnv, utils.EzPickle):
         )
 
     def _get_obs(self):
-        base = np.concatenate(
-            (self.data.qpos.flat[2:], self.data.qvel.flat.copy())
-        )  # 27
         R = self.data.body(1).xmat.reshape(3, 3)
-        tilt = R[2, :2]  # 2 — most terrain-discriminative signal
-        torso_vel = self.data.qvel.flat[:3].copy()  # 3 — slip detection
-        return np.concatenate([base, tilt, torso_vel])  # 32-dim instead of 49
+
+        # PID signals at fixed indices [-2] and [-1] — read directly by SO2WithPID
+        y_pos = np.array([self.data.qpos[1]])        # lateral position, index -2
+        yaw   = np.array([np.arctan2(R[1, 0], R[0, 0])])  # heading error, index -1
+
+        return np.concatenate([y_pos, yaw])
 
     def reset_model(self):
         noise = self._reset_noise_scale

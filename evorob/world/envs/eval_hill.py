@@ -96,7 +96,7 @@ class EvalHillEnv(MujocoEnv, utils.EzPickle):
         terminated = self._is_terminated(xyz_velocity)
 
         #"Move or Die" Forward Progress
-        forward_bonus = min(max(x_velocity, 0), 1.5) * 10.0
+        forward_bonus = min(max(x_velocity, 0), 1.5) * 15.0
         still_penalty = -5.0 if x_velocity < 0.1 else 0
         lateral_penalty = -(abs(y_after - y_before) / self.dt) * 5.0
         y_displacement_penalty = -abs(y_after) * 3.0
@@ -110,6 +110,11 @@ class EvalHillEnv(MujocoEnv, utils.EzPickle):
         z_velocity = float(xyz_velocity[2])
         z_elevation_bonus = max(z_velocity, 0) * 20.0  # Massive reward for moving up
 
+        # Sparse Terminal Reward
+        # If the robot survived the full 500 steps, grant a massive payout for its absolute altitude
+        # (Change 500 to match the n_steps used in final_project_train.py)
+        sparse_z_bonus = 0 if terminated or self._step_count < 500 else float(xyz_after[2]) * 50.0
+
         reward = (
             healthy_reward
             + forward_bonus
@@ -118,16 +123,11 @@ class EvalHillEnv(MujocoEnv, utils.EzPickle):
             + y_displacement_penalty
             + backward_penalty
             + heading_reward
-            + z_elevation_bonus
+            # + z_elevation_bonus
+            # + sparse_z_bonus
             - ctrl_cost * 0.1
             - cfrc_cost * 0.1
         )
-
-        # Sparse Terminal Reward
-        # If the robot survived the full 300 steps, grant a massive payout for its absolute altitude
-        # (Change 300 to match the n_steps used in final_project_train.py)
-        if not terminated and self._step_count >= 300:
-            reward += float(xyz_after[2]) * 50.0
 
         self._prev_x = x_position
 
@@ -164,13 +164,13 @@ class EvalHillEnv(MujocoEnv, utils.EzPickle):
         )  # Kill episode if tilted > 73 degrees, R[2,2] is the cosine of the robot's overall tilt angle
 
     def _get_obs(self):
-        base = np.concatenate(
-            (self.data.qpos.flat[2:], self.data.qvel.flat.copy())
-        )  # 27
         R = self.data.body(1).xmat.reshape(3, 3)
-        tilt = R[2, :2]  # 2 — most terrain-discriminative signal
-        torso_vel = self.data.qvel.flat[:3].copy()  # 3 — slip detection
-        return np.concatenate([base, tilt, torso_vel])  # 32-dim instead of 49
+
+        # PID signals at fixed indices [-2] and [-1] — read directly by SO2WithPID
+        y_pos = np.array([self.data.qpos[1]])        # lateral position, index -2
+        yaw   = np.array([np.arctan2(R[1, 0], R[0, 0])])  # heading error, index -1
+
+        return np.concatenate([y_pos, yaw])
 
     def reset_model(self):
         noise = self._reset_noise_scale
