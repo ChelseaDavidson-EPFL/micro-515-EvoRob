@@ -20,6 +20,7 @@ Optional flags
 """
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -178,6 +179,39 @@ def load_convergence(results_dir: str):
         stds.append(f.std())
 
     return (np.array(gens), np.array(bests), np.array(means), np.array(stds))
+
+
+def save_video_controller_artifacts(
+    output_dir: str,
+    genotype: np.ndarray,
+    controller,
+    source_path: str,
+) -> None:
+    """Save the controller genotype used to produce videos and its metadata."""
+    full_genotype = np.asarray(genotype)
+    controller_n_params = int(getattr(controller, "n_params", full_genotype.size))
+    controller_genotype = full_genotype[:controller_n_params]
+
+    controller_geno_path = join(output_dir, "video_controller_genotype.npy")
+    full_geno_path = join(output_dir, "video_full_genotype.npy")
+    info_path = join(output_dir, "video_controller_info.json")
+
+    np.save(controller_geno_path, controller_genotype)
+    np.save(full_geno_path, full_genotype)
+
+    info = {
+        "controller_type": type(controller).__name__,
+        "controller_n_params": controller_n_params,
+        "controller_genotype_shape": list(controller_genotype.shape),
+        "full_genotype_shape": list(full_genotype.shape),
+        "source_checkpoint": source_path,
+    }
+    with open(info_path, "w", encoding="utf-8") as f:
+        json.dump(info, f, indent=2)
+
+    print(f"  Saved video controller genotype: {controller_geno_path}")
+    print(f"  Saved video full genotype:      {full_geno_path}")
+    print(f"  Saved video controller info:    {info_path}")
 
 
 # ---------------------------------------------------------------------------
@@ -494,6 +528,13 @@ def main():
 
         world = FinalWorld()
         results = evaluate_best(world, x_best, n_episodes=args.n_episodes)
+
+        save_video_controller_artifacts(
+            args.output_dir,
+            x_best,
+            world.controller,
+            join(args.results_dir, "x_best.npy"),
+        )
 
         # Save the Robot XML generated during evaluation
         robot_xml_path = join(world.temp_dir.name, "Robot.xml")

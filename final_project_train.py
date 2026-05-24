@@ -93,7 +93,7 @@ class FinalWorld(World):
         self.controller = CPGController(
             input_size=32,
             output_size=8,
-            hidden_size=8,  # Reduced from 8 to shrink search space (~200 params total)
+            hidden_size=4,  # Reduced from 8 to shrink search space (~200 params total)
             base_freq=2 * np.pi,
             max_dfreq=np.pi,
             dt=0.05,
@@ -318,6 +318,18 @@ class FinalWorld(World):
         img = Image.fromarray((terrain * 255).astype(np.uint8), mode="L")
         img.save(join(self.temp_dir.name, filename))
 
+    def _neutral_from_info(self, info_dict, n_repeats: int):
+        """Compute per-environment neutral reward from env info (vectorized).
+
+        Matches the formula used in `final_project_test.py`:
+            healthy_reward + x_position - ctrl_cost - cfrc_cost
+        """
+        healthy = np.asarray(info_dict.get("healthy_reward", np.ones(n_repeats)))
+        x_pos = np.asarray(info_dict.get("x_position", np.zeros(n_repeats)))
+        ctrl_cost = np.asarray(info_dict.get("ctrl_cost", np.zeros(n_repeats)))
+        cfrc_cost = np.asarray(info_dict.get("cfrc_cost", np.zeros(n_repeats)))
+        return healthy + x_pos - ctrl_cost - cfrc_cost
+
     # ------------------------------------------------------------------
     # Per-terrain evaluation
     # ------------------------------------------------------------------
@@ -345,7 +357,9 @@ class FinalWorld(World):
         for t in range(n_steps):
             actions = np.where(done[:, None], 0, self.controller.get_action(obs))
             obs, r, terminated, truncated, info_dict = envs.step(actions)
-            rewards[t, ~done] = r[~done]
+            # Use the neutral reward derived from env info (same as final_project_test)
+            per_step = self._neutral_from_info(info_dict, n_repeats)
+            rewards[t, ~done] = per_step[~done]
             done |= terminated | truncated
 
             # Terminate early if the robot is stuck (Step 100 instead of 200)

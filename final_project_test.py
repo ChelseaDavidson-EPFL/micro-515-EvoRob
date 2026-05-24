@@ -40,6 +40,7 @@ Always include in your zip:
 """
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -88,7 +89,7 @@ GENOTYPE_PATH = None  # e.g. "/abs/path/to/x_best.npy"
 
 # --- Output ---
 OUTPUT_DIR = "evaluation_output"
-N_EPISODES = 10  # increase to 256 for the final leaderboard submission
+N_EPISODES = 256  # increase to 256 for the final leaderboard submission
 SEED = 0  # fixed — do NOT change for a fair comparison
 MAX_STEPS = 1000  # fixed — do NOT change
 
@@ -103,6 +104,56 @@ def _neutral_reward(info: dict) -> float:
         - float(info.get("ctrl_cost", 0.0))
         - float(info.get("cfrc_cost", 0.0))
     )
+
+
+def _find_checkpoint_file(checkpoint_dir: str, fname: str) -> str | None:
+    """Find fname in the latest numeric subdir, falling back to root."""
+    subdirs = sorted(
+        int(n)
+        for n in os.listdir(checkpoint_dir)
+        if os.path.isdir(os.path.join(checkpoint_dir, n)) and n.isdigit()
+    )
+    search_dirs = (
+        [os.path.join(checkpoint_dir, str(max(subdirs)))] if subdirs else []
+    ) + [checkpoint_dir]
+    for d in search_dirs:
+        p = os.path.join(d, fname)
+        if os.path.isfile(p):
+            return p
+    return None
+
+
+def save_video_controller_artifacts(
+    world: EvalWorld,
+    full_genotype: np.ndarray,
+    source_path: str,
+    output_dir: str,
+) -> None:
+    """Save controller genotype and metadata used for the recorded video."""
+    genotype = np.asarray(full_genotype)
+    controller_n_params = int(getattr(world.controller, "n_params", genotype.size))
+    controller_genotype = genotype[:controller_n_params]
+
+    controller_geno_path = os.path.join(output_dir, "video_controller_genotype.npy")
+    full_geno_path = os.path.join(output_dir, "video_full_genotype.npy")
+    info_path = os.path.join(output_dir, "video_controller_info.json")
+
+    np.save(controller_geno_path, controller_genotype)
+    np.save(full_geno_path, genotype)
+
+    info = {
+        "controller_type": type(world.controller).__name__,
+        "controller_n_params": controller_n_params,
+        "controller_genotype_shape": list(controller_genotype.shape),
+        "full_genotype_shape": list(genotype.shape),
+        "source_genotype_path": source_path,
+    }
+    with open(info_path, "w", encoding="utf-8") as f:
+        json.dump(info, f, indent=2)
+
+    print(f"Saved video controller genotype: {controller_geno_path}")
+    print(f"Saved video full genotype:      {full_geno_path}")
+    print(f"Saved video controller info:    {info_path}")
 
 
 def _write_video(out_path: str, frames: list[np.ndarray], fps: int = 20) -> None:
@@ -288,6 +339,8 @@ if __name__ == "__main__":
     )
 
     world = EvalWorld()
+    genotype = None
+    genotype_source_path = None
 
     if MY_CONTROLLER is not None:
         world.set_controller(MY_CONTROLLER)
@@ -301,12 +354,17 @@ if __name__ == "__main__":
             raise FileNotFoundError(f"Genotype not found: {GENOTYPE_PATH}")
         world.update_robot_xml(ROBOT_XML_PATH)
         genotype = np.load(GENOTYPE_PATH, allow_pickle=True)
+        genotype_source_path = GENOTYPE_PATH
         world.controller.geno2pheno(genotype[: world.n_weights])
         print(f"Robot  : {ROBOT_XML_PATH}")
         print(f"Geno   : {GENOTYPE_PATH}  shape={genotype.shape}")
     else:
         # Option A (default): load everything from the checkpoint directory
         world.load_from_checkpoint(checkpoint_dir)
+        genotype_path = _find_checkpoint_file(checkpoint_dir, "x_best.npy")
+        if genotype_path is not None:
+            genotype = np.load(genotype_path, allow_pickle=True)
+            genotype_source_path = genotype_path
 
     print(f"\nRunning {N_EPISODES} episodes on the evaluation terrain  (seed={SEED}) …")
     rewards = run_episodes(world, N_EPISODES, SEED)
@@ -318,5 +376,15 @@ if __name__ == "__main__":
     )
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
+    if genotype is not None and genotype_source_path is not None:
+        save_video_controller_artifacts(
+            world=world,
+            full_genotype=genotype,
+            source_path=genotype_source_path,
+            output_dir=OUTPUT_DIR,
+        )
+    else:
+        print("Could not locate genotype used for video — skipping genotype export.")
+
     save_score(world, rewards, OUTPUT_DIR)
     record_video(world, os.path.join(OUTPUT_DIR, "evaluation_video.mp4"), SEED)

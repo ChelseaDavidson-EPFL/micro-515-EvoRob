@@ -1,0 +1,11 @@
+{
+  "controller_type": "CPGController",
+  "controller_n_params": 230,
+  "controller_genotype_shape": [
+    230
+  ],
+  "full_genotype_shape": [
+    234
+  ],
+  "source_checkpoint": "results\\warmstart_8hidden_3\\x_best.npy"
+}
