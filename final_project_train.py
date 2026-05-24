@@ -388,8 +388,7 @@ class FinalWorld(World):
                 self.controller.reset_controller(batch_size=1)
                 obs, _ = env.reset(seed=int(rng.integers(0, 2**31)))
                 total, done, t = 0.0, False, 0
-                while not done:
-                    self._set_controller_navigation_feedback(env)
+                while not done:                    
                     action = self.controller.get_action(obs)
                     if action.ndim > 1:
                         action = action.squeeze(0)

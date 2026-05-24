@@ -153,12 +153,15 @@ class SO2WithPIDController(Controller):
         n_st  = num_dofs * 2
         A     = np.zeros((n_st, n_st))
 
-        # Intrinsic oscillator weights (2π frequency) on super-diagonal
+        # Intrinsic oscillator weights: fixed at 2π (1 Hz).
+        # NOT included in weight_map so they are never overwritten by geno2pheno.
+        # Keeping them fixed guarantees the oscillator always runs at a known
+        # frequency regardless of the initial random genotype values.
         rows = np.arange(0, n_st, 2)
         cols = np.arange(1, n_st, 2)
-        A[rows, cols] = np.ones(num_dofs) * 2 * np.pi
+        A[rows, cols] = 2 * np.pi
 
-        # Random inter-joint couplings
+        # Random inter-joint couplings (these ARE evolved)
         n_possible = (num_dofs * (num_dofs - 1)) // 2
         n_active   = max(1, int(round(n_possible * density)))
         tri_r, tri_c = np.triu_indices(num_dofs, k=1)
@@ -167,8 +170,9 @@ class SO2WithPIDController(Controller):
         inter        = rng.random(n_active)
         A[sel_r * 2, sel_c * 2] = inter
 
-        weight_map = np.argwhere(A > 0)
-        weights    = A[weight_map[:, 0], weight_map[:, 1]].copy()
+        # weight_map covers only inter-joint couplings, not intrinsic weights
+        weight_map = np.column_stack([sel_r * 2, sel_c * 2])  # (n_active, 2)
+        weights    = inter.copy()
         A -= A.T   # enforce anti-symmetry
         return A, weight_map, weights
 
