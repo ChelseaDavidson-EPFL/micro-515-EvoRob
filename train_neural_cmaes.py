@@ -113,8 +113,8 @@ def main():
         sigma=0.1,  # Permet une meilleure exploration de la dynamique physique
         bounds=(-5, 5),  # Augmenté pour permettre de représenter les gains K > 1.0
         output_dir=results_dir,
+        initial_mean=seed_genotype,
     )
-    ea.es.x0 = seed_genotype.tolist()
 
     # 4. Loop
     print(f"\nStarting CMA-ES Optimization ({args.generations} gens)...")

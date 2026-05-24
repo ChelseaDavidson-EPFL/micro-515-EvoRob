@@ -67,9 +67,10 @@ from evorob.world.eval_world import EvalWorld
 # from evorob.world.robot.controllers.so2 import SO2Controller
 # MY_CONTROLLER = SO2Controller(input_size=27, output_size=8, hidden_size=8)
 
-from evorob.world.robot.controllers.cpg import CPGController
+from evorob.world.robot.controllers.cpg import CPGController, CPGControllerWithPID
 
-MY_CONTROLLER = CPGController(
+MY_CONTROLLER = CPGControllerWithPID(
+    CPGController(
     input_size=32,
     output_size=8,
     hidden_size=4,
@@ -77,6 +78,7 @@ MY_CONTROLLER = CPGController(
     max_dfreq=np.pi,
     dt=0.05,
     inter_con_density=0.5,
+)
 )
 
 # --- Paths ---
