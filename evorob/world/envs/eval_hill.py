@@ -111,11 +111,11 @@ class EvalHillEnv(MujocoEnv, utils.EzPickle):
 
         # Reward Active Climbing
         z_velocity = float(xyz_velocity[2])
-        z_elevation_bonus = max(z_velocity, 0) * 20.0  # Massive reward for moving up
+        z_elevation_bonus = min(max(z_velocity, 0), 1.5) * 8.0  # Massive reward for moving up
 
         # Sparse Terminal Reward — fires on the last step if the robot survived.
         # Threshold matches n_steps used in final_project_train.py.
-        sparse_z_bonus = 0 if terminated or self._step_count < 700 else float(xyz_after[2]) * 50.0
+        sparse_z_bonus = 0 if terminated or self._step_count < 700 else float(xyz_after[2]) * 20.0
 
         # Standing height bonus — same rationale as flat/ice.
         # On hill, z_after also grows as the robot climbs, giving a natural
@@ -130,8 +130,8 @@ class EvalHillEnv(MujocoEnv, utils.EzPickle):
             + backward_penalty
             + heading_reward
             + height_bonus
-            # + z_elevation_bonus
-            # + sparse_z_bonus
+            + z_elevation_bonus
+            + sparse_z_bonus
             - ctrl_cost * 0.3
             - cfrc_cost * 0.05
         )

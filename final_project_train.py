@@ -830,7 +830,7 @@ def run_cmaes_refinement(
                 [(g, n_repeats, n_steps) for g in pop],
             )
             f3_arr    = np.array(results)               # (pop_size, 3)
-            weights   = np.array([1.0, 1.0, 1.0])      # flat, ice, hill — hill already upweighted through reward shaping
+            weights   = np.array([1.0, 1.0, 2.0])      # flat, ice, hill — hill already upweighted through reward shaping
             fitnesses = (f3_arr * weights).sum(axis=1)  # weighted-sum scalarisation
 
             best_idx = int(np.argmax(fitnesses))
@@ -886,7 +886,7 @@ if __name__ == "__main__":
                 seed_genotype=seed,
                 num_generations=800,
                 population_size=64,
-                sigma=0.2,
+                sigma=0.3,
                 n_repeats=2,
                 n_steps=700,  # matches n_steps used in NSGA-II and eval_hill sparse_z threshold
                 ckpt_interval=5,

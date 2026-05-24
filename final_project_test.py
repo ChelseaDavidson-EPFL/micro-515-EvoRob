@@ -118,11 +118,22 @@ def _neutral_reward(info: dict) -> float:
     )
 
 
+def _make_nav_sensor(env):
+    """Return a sensor_fn that mirrors the training env _get_obs: [y_pos, yaw]."""
+    data = env.unwrapped.data
+    def _sensor(obs):
+        R = data.body(1).xmat.reshape(3, 3)
+        return np.array([float(data.qpos[1]),
+                         float(np.arctan2(R[1, 0], R[0, 0]))])
+    return _sensor
+
+
 def run_episodes(world: EvalWorld, n_episodes: int, seed: int) -> list:
     rng = np.random.default_rng(seed)
     env = gym.make(
         "EvalEnv-v0", robot_path=world.world_file, max_episode_steps=MAX_STEPS
     )
+    world.sensor_fn = _make_nav_sensor(env)
     rewards = []
 
     for ep in range(n_episodes):
@@ -154,6 +165,7 @@ def record_video(world: EvalWorld, out_path: str, seed: int) -> None:
             render_mode="rgb_array",
             max_episode_steps=MAX_STEPS,
         )
+        world.sensor_fn = _make_nav_sensor(env)
         world.controller.reset_controller(batch_size=1)
         obs, _ = env.reset(seed=seed)
         frames = []
