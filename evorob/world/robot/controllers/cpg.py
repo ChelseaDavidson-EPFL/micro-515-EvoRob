@@ -31,10 +31,10 @@ import numpy as np
 
 from evorob.world.robot.controllers.base import Controller
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _sigmoid(x: np.ndarray) -> np.ndarray:
     return 1.0 / (1.0 + np.exp(-np.clip(x, -20, 20)))
@@ -52,6 +52,7 @@ def _rk4(state: np.ndarray, A: np.ndarray, dt: float) -> np.ndarray:
 # ---------------------------------------------------------------------------
 # CPG + MLP controller
 # ---------------------------------------------------------------------------
+
 
 class CPGController(Controller):
     """SO2 oscillator whose per-joint gain and frequency are modulated by a
@@ -82,22 +83,22 @@ class CPGController(Controller):
         dt: float = 0.05,
         inter_con_density: float = 0.5,
     ):
-        self.n_input      = input_size
-        self.n_output     = output_size
-        self.n_hidden     = hidden_size
-        self.base_freq    = base_freq
-        self.max_dfreq    = max_dfreq
-        self.dt           = dt
-        self.n_joints     = output_size
+        self.n_input = input_size
+        self.n_output = output_size
+        self.n_hidden = hidden_size
+        self.base_freq = base_freq
+        self.max_dfreq = max_dfreq
+        self.dt = dt
+        self.n_joints = output_size
 
         # ------------------------------------------------------------------
         # MLP parameter counts
         # ------------------------------------------------------------------
         # Output: gain (n_joints) + freq_delta (n_joints)  →  2 * n_joints
         self._mlp_out = 2 * self.n_joints
-        self._n_i2h   = input_size * hidden_size          # input→hidden weights
-        self._n_h2o   = hidden_size * self._mlp_out       # hidden→output weights
-        self._n_mlp   = self._n_i2h + self._n_h2o
+        self._n_i2h = input_size * hidden_size  # input→hidden weights
+        self._n_h2o = hidden_size * self._mlp_out  # hidden→output weights
+        self._n_mlp = self._n_i2h + self._n_h2o
 
         # MLP weight matrices (initialised to zero; geno2pheno fills them)
         self._W1 = np.zeros((hidden_size, input_size))
@@ -106,10 +107,11 @@ class CPGController(Controller):
         # ------------------------------------------------------------------
         # SO2 oscillator setup  (mirrors so2.py)
         # ------------------------------------------------------------------
-        self._A_base, self._weight_map, self._so2_weights = \
-            self._init_so2(output_size, inter_con_density)
+        self._A_base, self._weight_map, self._so2_weights = self._init_so2(
+            output_size, inter_con_density
+        )
         self._n_so2_coupling = len(self._so2_weights)
-        self._n_so2_phase    = output_size * 2          # initial state
+        self._n_so2_phase = output_size * 2  # initial state
 
         # ------------------------------------------------------------------
         # Total genotype length
@@ -117,14 +119,14 @@ class CPGController(Controller):
         self.n_params = self._n_mlp + self._n_so2_coupling + self._n_so2_phase
 
         # Runtime state (set by reset_controller / geno2pheno)
-        self._A               = self._A_base.copy()
+        self._A = self._A_base.copy()
         # Spread phases so legs are out of sync from step 1:
         phases = np.zeros((output_size * 2, 1))
         for j in range(output_size):
-            phases[j * 2]     = np.cos(j * np.pi / output_size)   # sine component
-            phases[j * 2 + 1] = np.sin(j * np.pi / output_size)   # cosine component
+            phases[j * 2] = np.cos(j * np.pi / output_size)  # sine component
+            phases[j * 2 + 1] = np.sin(j * np.pi / output_size)  # cosine component
         self._template_state = phases
-        self._y               = None          # shape (2*n_joints, batch)
+        self._y = None  # shape (2*n_joints, batch)
 
         # Base frequency vector applied along super-diagonal
         self._omega = np.ones(output_size) * base_freq
@@ -134,9 +136,9 @@ class CPGController(Controller):
     # ------------------------------------------------------------------
 
     def _init_so2(self, num_dofs: int, density: float):
-        rng  = np.random.default_rng(42)
+        rng = np.random.default_rng(42)
         n_st = num_dofs * 2
-        A    = np.zeros((n_st, n_st))
+        A = np.zeros((n_st, n_st))
 
         # Intrinsic oscillator weights on super-diagonal
         rows = np.arange(0, n_st, 2)
@@ -145,15 +147,15 @@ class CPGController(Controller):
 
         # Random inter-connections
         n_possible = (num_dofs * (num_dofs - 1)) // 2
-        n_active   = max(1, int(round(n_possible * density)))
+        n_active = max(1, int(round(n_possible * density)))
         tri_r, tri_c = np.triu_indices(num_dofs, k=1)
-        perm         = rng.permutation(len(tri_r))[:n_active]
+        perm = rng.permutation(len(tri_r))[:n_active]
         sel_r, sel_c = tri_r[perm], tri_c[perm]
-        inter        = rng.random(n_active)
+        inter = rng.random(n_active)
         A[sel_r * 2, sel_c * 2] = inter
 
         weight_map = np.argwhere(A > 0)
-        weights    = A[weight_map[:, 0], weight_map[:, 1]].copy()
+        weights = A[weight_map[:, 0], weight_map[:, 1]].copy()
 
         # Enforce anti-symmetry
         A -= A.T
@@ -171,30 +173,30 @@ class CPGController(Controller):
         cursor = 0
 
         # MLP weights
-        self._W1 = genotype[cursor: cursor + self._n_i2h].reshape(
+        self._W1 = genotype[cursor : cursor + self._n_i2h].reshape(
             self.n_hidden, self.n_input
         )
         cursor += self._n_i2h
 
-        self._W2 = genotype[cursor: cursor + self._n_h2o].reshape(
+        self._W2 = genotype[cursor : cursor + self._n_h2o].reshape(
             self._mlp_out, self.n_hidden
         )
         cursor += self._n_h2o
 
         # SO2 coupling weights
-        so2_w = genotype[cursor: cursor + self._n_so2_coupling]
+        so2_w = genotype[cursor : cursor + self._n_so2_coupling]
         cursor += self._n_so2_coupling
         self._A = self._A_base.copy()
-        self._A[self._weight_map[:, 0], self._weight_map[:, 1]]  = so2_w
-        self._A[self._weight_map[:, 1], self._weight_map[:, 0]]  = -so2_w
+        self._A[self._weight_map[:, 0], self._weight_map[:, 1]] = so2_w
+        self._A[self._weight_map[:, 1], self._weight_map[:, 0]] = -so2_w
 
         # Initial oscillator phases
-        phase = genotype[cursor: cursor + self._n_so2_phase]
+        phase = genotype[cursor : cursor + self._n_so2_phase]
         self._template_state = phase.reshape(self.n_joints * 2, 1)
 
     def reset_controller(self, batch_size: int = 1) -> None:
         """Reset oscillator state for a new batch of episodes."""
-        self._y = np.tile(self._template_state, (1, batch_size))   # (2J, B)
+        self._y = np.tile(self._template_state, (1, batch_size))  # (2J, B)
 
     def get_action(self, obs: np.ndarray) -> np.ndarray:
         """
@@ -208,7 +210,7 @@ class CPGController(Controller):
         """
         squeeze = obs.ndim == 1
         if squeeze:
-            obs = obs[np.newaxis, :]          # → (1, input_size)
+            obs = obs[np.newaxis, :]  # → (1, input_size)
 
         batch = obs.shape[0]
 
@@ -219,11 +221,11 @@ class CPGController(Controller):
         # ------------------------------------------------------------------
         # MLP forward pass  →  gain & freq modulation
         # ------------------------------------------------------------------
-        hidden = np.tanh(obs @ self._W1.T)              # (B, hidden)
-        out    = hidden @ self._W2.T                    # (B, 2*J)
+        hidden = np.tanh(obs @ self._W1.T)  # (B, hidden)
+        out = hidden @ self._W2.T  # (B, 2*J)
 
-        gain      = _sigmoid(out[:, :self.n_joints])    # (B, J) ∈ (0,1)
-        freq_mod  = np.tanh(out[:, self.n_joints:]) * self.max_dfreq  # (B, J)
+        gain = _sigmoid(out[:, : self.n_joints])  # (B, J) ∈ (0,1)
+        freq_mod = np.tanh(out[:, self.n_joints :]) * self.max_dfreq  # (B, J)
 
         # ------------------------------------------------------------------
         # Modulated SO2 step
@@ -234,11 +236,11 @@ class CPGController(Controller):
         #
         # Correction: Δy_i ≈ Δω_j * dt * y_{i+1}  (linearised update on
         # the oscillating dimension pair).  This avoids rebuilding A per sample.
-        next_y = _rk4(self._y, self._A, self.dt)       # (2J, B)
+        next_y = _rk4(self._y, self._A, self.dt)  # (2J, B)
 
         # Freq modulation correction  (Δω acts on the cosine component)
         # next_y[2j] += freq_mod[:, j] * dt * next_y[2j+1]
-        freq_correction = freq_mod.T * self.dt * next_y[1::2, :]   # (J, B)
+        freq_correction = freq_mod.T * self.dt * next_y[1::2, :]  # (J, B)
         next_y[0::2, :] += freq_correction
 
         self._y = next_y
@@ -246,8 +248,8 @@ class CPGController(Controller):
         # ------------------------------------------------------------------
         # Output: gain-modulated sine component
         # ------------------------------------------------------------------
-        sine_components = np.tanh(next_y[0::2, :]).T    # (B, J)
-        actions = gain * sine_components                  # (B, J)
+        sine_components = np.tanh(next_y[0::2, :]).T  # (B, J)
+        actions = gain * sine_components  # (B, J)
 
         return actions.squeeze(0) if squeeze else actions
 
@@ -338,9 +340,7 @@ class CPGControllerWithPID(Controller):
             self._integral + error * dt, -self.integral_limit, self.integral_limit
         )
 
-        correction = (
-            self.kp * error + self.ki * self._integral - self.kd * joint_vel
-        )
+        correction = self.kp * error + self.ki * self._integral - self.kd * joint_vel
         correction = np.clip(correction, -self.output_limit, self.output_limit)
         actions = np.clip(feedforward + correction, -1.0, 1.0)
 

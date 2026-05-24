@@ -82,7 +82,9 @@ def _resolve_phase2_seed_path(seed_path: str) -> str:
 
     basename = os.path.basename(resolved_path)
     if basename in {"video_full_genotype.npy", "video_controller_genotype.npy"}:
-        info_path = os.path.join(os.path.dirname(resolved_path), "video_controller_info.json")
+        info_path = os.path.join(
+            os.path.dirname(resolved_path), "video_controller_info.json"
+        )
         if not os.path.isfile(info_path):
             raise FileNotFoundError(
                 f"Warmstart artifact '{seed_path}' is missing metadata: {info_path}"
@@ -111,6 +113,7 @@ def _resolve_phase2_seed_path(seed_path: str) -> str:
         )
 
     return resolved_path
+
 
 # ---------------------------------------------------------------------------
 # FinalWorld — body + brain co-evolution across multiple terrains
@@ -821,7 +824,9 @@ def run_cmaes_refinement(
         sigma=sigma,
         bounds=bounds,
         output_dir=results_dir,
-        initial_mean=initial_morphology if initial_morphology is not None else seed_genotype,
+        initial_mean=(
+            initial_morphology if initial_morphology is not None else seed_genotype
+        ),
     )
 
     if initial_morphology is not None:

@@ -71,14 +71,14 @@ from evorob.world.robot.controllers.cpg import CPGController, CPGControllerWithP
 
 MY_CONTROLLER = CPGControllerWithPID(
     CPGController(
-    input_size=32,
-    output_size=8,
-    hidden_size=4,
-    base_freq=2 * np.pi,
-    max_dfreq=np.pi,
-    dt=0.05,
-    inter_con_density=0.5,
-)
+        input_size=32,
+        output_size=8,
+        hidden_size=4,
+        base_freq=2 * np.pi,
+        max_dfreq=np.pi,
+        dt=0.05,
+        inter_con_density=0.5,
+    )
 )
 
 # --- Paths ---
