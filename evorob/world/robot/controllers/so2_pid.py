@@ -113,8 +113,8 @@ class SO2WithPIDController(Controller):
         self._n_so2_coupling = len(_init_w)
         self._n_so2_phase    = output_size * 2
 
-        # Genotype: [SO2 coupling weights | SO2 initial phases]
-        self.n_params = self._n_so2_coupling + self._n_so2_phase
+        # Genotype: [SO2 coupling weights | SO2 initial phases | omega]
+        self.n_params = self._n_so2_coupling + self._n_so2_phase + 1
 
         # Runtime SO2 state
         self._A = self._A_base.copy()
@@ -153,10 +153,8 @@ class SO2WithPIDController(Controller):
         n_st  = num_dofs * 2
         A     = np.zeros((n_st, n_st))
 
-        # Intrinsic oscillator weights: fixed at 2π (1 Hz).
-        # NOT included in weight_map so they are never overwritten by geno2pheno.
-        # Keeping them fixed guarantees the oscillator always runs at a known
-        # frequency regardless of the initial random genotype values.
+        # Intrinsic oscillator — default 2π (1 Hz); geno2pheno overrides this
+        # with an evolvable omega so the EA can find the optimal step rate.
         rows = np.arange(0, n_st, 2)
         cols = np.arange(1, n_st, 2)
         A[rows, cols] = 2 * np.pi
@@ -184,7 +182,7 @@ class SO2WithPIDController(Controller):
         return self.n_params
 
     def geno2pheno(self, genotype: np.ndarray) -> None:
-        """Decode genotype into SO2 coupling weights and initial phases."""
+        """Decode genotype into SO2 coupling weights, initial phases, and frequency."""
         cursor = 0
 
         # SO2 coupling weights
@@ -196,7 +194,18 @@ class SO2WithPIDController(Controller):
 
         # Initial oscillator phases
         phase = genotype[cursor: cursor + self._n_so2_phase]
+        cursor += self._n_so2_phase
         self._template_state = phase.reshape(self.n_joints * 2, 1)
+
+        # Evolvable intrinsic frequency
+        # g ∈ (-1, 1) → omega ∈ (π, 4π) = (0.5 Hz, 2 Hz); g=0 → 2π = 1 Hz (warm-start default)
+        omega_g = float(genotype[cursor])
+        omega   = 2 * np.pi * max(0.5, 1.0 + omega_g)
+        n_st    = self.n_joints * 2
+        intr_r  = np.arange(0, n_st, 2)
+        intr_c  = np.arange(1, n_st, 2)
+        self._A[intr_r, intr_c] =  omega
+        self._A[intr_c, intr_r] = -omega
 
     def reset_controller(self, batch_size: int = 1) -> None:
         """Reset SO2 state and PID integrals for a new episode."""

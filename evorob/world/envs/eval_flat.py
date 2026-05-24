@@ -102,8 +102,8 @@ class EvalFlatEnv(MujocoEnv, utils.EzPickle):
         else:
             self._stuck_count = 0
 
-        # Forward bonus: ×5 gives max 7.5/step at 1.5 m/s.
-        forward_bonus = min(max(x_velocity, 0), 1.5) * 5.0
+        # Forward bonus: ×7 gives max 10.5/step at 1.5 m/s.
+        forward_bonus = min(max(x_velocity, 0), 1.5) * 7.0
 
         # still_penalty removed — it fought the stuck_termination (200 steps) and
         # created a reward valley where slow walking was worse than standing still,
@@ -117,11 +117,9 @@ class EvalFlatEnv(MujocoEnv, utils.EzPickle):
         R = self.data.body(1).xmat.reshape(3, 3)
         heading_reward = float(R[:, 0][0]) * 0.5
 
-        # Stronger vertical-velocity penalty to deter jumping without harming
-        # normal gait oscillation (typical walk z_vel ~0.05 m/s → cost ~0.15/step;
-        # a jump at z_vel ~2 m/s → cost ~6/step, exceeding the forward bonus).
-        z_velocity = float(self.data.qvel.flat[2])
-        vertical_penalty = -abs(z_velocity) * 3.0
+        # vertical_penalty removed — it caused the EA to avoid ALL vertical body
+        # motion, producing a low crouching "swimming" gait with no leg lift.
+        # Jumping is already handled by the z > 1.0 episode termination.
 
         reward = (
             healthy_reward
@@ -130,7 +128,6 @@ class EvalFlatEnv(MujocoEnv, utils.EzPickle):
             + y_displacement_penalty
             + backward_penalty
             + heading_reward
-            + vertical_penalty
             - ctrl_cost * 0.3
             - cfrc_cost * 0.3
         )
