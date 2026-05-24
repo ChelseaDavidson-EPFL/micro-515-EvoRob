@@ -84,6 +84,7 @@ class EvalFlatEnv(MujocoEnv, utils.EzPickle):
         self.do_simulation(action, self.frame_skip)
         x_after = self.data.qpos[0]
         y_after = self.data.qpos[1]
+        z_after = float(self.data.qpos[2])
 
         x_velocity = (x_after - x_before) / self.dt
         y_drift = abs(y_after - y_before) / self.dt  # lateral velocity
@@ -117,9 +118,12 @@ class EvalFlatEnv(MujocoEnv, utils.EzPickle):
         R = self.data.body(1).xmat.reshape(3, 3)
         heading_reward = float(R[:, 0][0]) * 0.5
 
-        # vertical_penalty removed — it caused the EA to avoid ALL vertical body
-        # motion, producing a low crouching "swimming" gait with no leg lift.
-        # Jumping is already handled by the z > 1.0 episode termination.
+        # Standing height bonus — rewards full leg extension rather than crouching.
+        # Effective range: z ∈ [0.3, 1.0) → bonus ∈ [0, 2.1]/step.
+        height_bonus = max(0.0, z_after - 0.3) * 3.0
+
+        # cfrc_cost weight reduced from 0.3 → 0.05: cfrc directly penalises ground
+        # contact forces, so a high weight caused the EA to avoid pushing the ground.
 
         reward = (
             healthy_reward
@@ -128,8 +132,9 @@ class EvalFlatEnv(MujocoEnv, utils.EzPickle):
             + y_displacement_penalty
             + backward_penalty
             + heading_reward
+            + height_bonus
             - ctrl_cost * 0.3
-            - cfrc_cost * 0.3
+            - cfrc_cost * 0.05
         )
 
         info = {

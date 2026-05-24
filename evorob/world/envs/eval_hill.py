@@ -89,6 +89,7 @@ class EvalHillEnv(MujocoEnv, utils.EzPickle):
         x_velocity = float(xyz_velocity[0])
         x_position = float(xyz_after[0])
         y_after = float(xyz_after[1])
+        z_after = float(xyz_after[2])
 
         healthy_reward = 1.0
         ctrl_cost = float(np.sum(action**2) * self._ctrl_cost_weight)
@@ -96,7 +97,7 @@ class EvalHillEnv(MujocoEnv, utils.EzPickle):
         terminated = self._is_terminated(xyz_velocity)
 
         # Forward bonus: ×6 (slightly higher than flat since climbing is harder).
-        forward_bonus = min(max(x_velocity, 0), 1.5) * 6.0
+        forward_bonus = min(max(x_velocity, 0), 1.5) * 8.0
 
         # still_penalty removed — see eval_flat.py for rationale.
 
@@ -116,6 +117,11 @@ class EvalHillEnv(MujocoEnv, utils.EzPickle):
         # Threshold matches n_steps used in final_project_train.py.
         sparse_z_bonus = 0 if terminated or self._step_count < 700 else float(xyz_after[2]) * 50.0
 
+        # Standing height bonus — same rationale as flat/ice.
+        # On hill, z_after also grows as the robot climbs, giving a natural
+        # extra incentive for ascending.
+        height_bonus = max(0.0, z_after - 0.3) * 3.0
+
         reward = (
             healthy_reward
             + forward_bonus
@@ -123,10 +129,11 @@ class EvalHillEnv(MujocoEnv, utils.EzPickle):
             + y_displacement_penalty
             + backward_penalty
             + heading_reward
+            + height_bonus
             # + z_elevation_bonus
             # + sparse_z_bonus
             - ctrl_cost * 0.3
-            - cfrc_cost * 0.3
+            - cfrc_cost * 0.05
         )
 
         self._prev_x = x_position
