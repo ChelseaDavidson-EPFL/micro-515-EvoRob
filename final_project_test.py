@@ -41,8 +41,6 @@ Always include in your zip:
 
 import argparse
 import os
-import shutil
-import subprocess
 import numpy as np
 
 os.environ.setdefault("MUJOCO_GL", "glfw")
@@ -66,25 +64,31 @@ from evorob.world.eval_world import EvalWorld
 # from evorob.world.robot.controllers.so2 import SO2Controller
 # MY_CONTROLLER = SO2Controller(input_size=27, output_size=8, hidden_size=8)
 
-from evorob.world.robot.controllers.cpg import CPGController
+from evorob.world.robot.controllers.so2_pid import SO2WithPIDController
 
-MY_CONTROLLER = CPGController(
-    input_size=32,
+PID_ENABLED = True
+PID_KP_Y = 0.10
+PID_KI_Y = 0.0
+PID_KD_Y = 0.02
+PID_KP_HEADING = 0.20
+PID_KI_HEADING = 0.0
+PID_KD_HEADING = 0.03
+PID_STEER_LIMIT = 0.30
+PID_STEER_SIGN = 1.0
+
+MY_CONTROLLER = SO2WithPIDController(
+    input_size=2,
     output_size=8,
-    hidden_size=8,
-    base_freq=2 * np.pi,
-    max_dfreq=np.pi,
     dt=0.05,
     inter_con_density=0.5,
-    pid_enabled=True,
-    pid_kp_y=0.25,
-    pid_ki_y=0.0,
-    pid_kd_y=0.03,
-    pid_kp_heading=0.35,
-    pid_ki_heading=0.0,
-    pid_kd_heading=0.04,
-    pid_steer_limit=0.25,
-    pid_steer_sign=1.0,
+    pid_enabled=PID_ENABLED,
+    pid_kp_y=PID_KP_Y,
+    pid_ki_y=PID_KI_Y,
+    pid_kd_y=PID_KD_Y,
+    pid_kp_heading=PID_KP_HEADING,
+    pid_ki_heading=PID_KI_HEADING,
+    pid_kd_heading=PID_KD_HEADING,
+    pid_steer_limit=PID_STEER_LIMIT,
 )
 
 # --- Paths ---
@@ -114,112 +118,6 @@ def _neutral_reward(info: dict) -> float:
     )
 
 
-def _extract_navigation_feedback(env) -> tuple[float, float]:
-    """Read lateral position and yaw directly from MuJoCo."""
-    unwrapped = env.unwrapped
-    data = unwrapped.data
-    try:
-        y_position = float(data.body(1).xpos[1])
-        R = data.body(1).xmat.reshape(3, 3)
-        heading = float(np.arctan2(R[1, 0], R[0, 0]))
-    except Exception:
-        y_position = float(data.qpos[1])
-        quat = data.qpos[3:7]
-        w, x, y, z = quat
-        siny_cosp = 2.0 * (w * z + x * y)
-        cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
-        heading = float(np.arctan2(siny_cosp, cosy_cosp))
-    return y_position, heading
-
-
-def _set_controller_navigation_feedback(controller, env) -> None:
-    setter = getattr(controller, "set_navigation_feedback", None)
-    if setter is None:
-        return
-    y_position, heading = _extract_navigation_feedback(env)
-    setter(y_position, heading)
-
-
-def _write_video(out_path: str, frames: list[np.ndarray], fps: int = 20) -> None:
-    """Write RGB/RGBA frames to an MP4 file using ffmpeg."""
-    if len(frames) == 0:
-        raise ValueError("No frames to write")
-
-    ffmpeg_exe = shutil.which("ffmpeg") or shutil.which("ffmpeg.exe")
-    if ffmpeg_exe is None:
-        try:
-            import imageio_ffmpeg
-
-            ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
-        except ImportError:
-            ffmpeg_exe = None
-    if ffmpeg_exe is None:
-        raise RuntimeError("ffmpeg executable not found in PATH")
-
-    first = np.ascontiguousarray(np.asarray(frames[0]))
-    if first.ndim != 3 or first.shape[2] not in (3, 4):
-        raise ValueError(f"Expected RGB/RGBA frame, got shape {first.shape}")
-    if first.shape[2] == 4:
-        first = first[:, :, :3]
-    if first.dtype != np.uint8:
-        if np.issubdtype(first.dtype, np.floating) and first.max() <= 1.0:
-            first = (255 * np.clip(first, 0.0, 1.0)).astype(np.uint8)
-        else:
-            first = first.astype(np.uint8)
-
-    height, width = first.shape[:2]
-    cmd = [
-        ffmpeg_exe,
-        "-y",
-        "-f",
-        "rawvideo",
-        "-vcodec",
-        "rawvideo",
-        "-pix_fmt",
-        "rgb24",
-        "-s",
-        f"{width}x{height}",
-        "-r",
-        str(fps),
-        "-i",
-        "-",
-        "-an",
-        "-vcodec",
-        "libx264",
-        "-pix_fmt",
-        "yuv420p",
-        out_path,
-    ]
-
-    proc = subprocess.Popen(
-        cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-    )
-    try:
-        for frame in frames:
-            arr = np.ascontiguousarray(np.asarray(frame))
-            if arr.ndim != 3 or arr.shape[2] not in (3, 4):
-                raise ValueError(f"Expected RGB/RGBA frame, got shape {arr.shape}")
-            if arr.shape[2] == 4:
-                arr = arr[:, :, :3]
-            if arr.dtype != np.uint8:
-                if np.issubdtype(arr.dtype, np.floating) and arr.max() <= 1.0:
-                    arr = (255 * np.clip(arr, 0.0, 1.0)).astype(np.uint8)
-                else:
-                    arr = arr.astype(np.uint8)
-            proc.stdin.write(arr.tobytes())
-    finally:
-        if proc.stdin is not None:
-            proc.stdin.close()
-        stderr = (
-            proc.stderr.read().decode("utf-8", errors="replace") if proc.stderr else ""
-        )
-        return_code = proc.wait()
-        if return_code != 0:
-            raise RuntimeError(
-                f"ffmpeg failed with code {return_code}: {stderr.strip()}"
-            )
-
-
 def run_episodes(world: EvalWorld, n_episodes: int, seed: int) -> list:
     rng = np.random.default_rng(seed)
     env = gym.make(
@@ -233,7 +131,6 @@ def run_episodes(world: EvalWorld, n_episodes: int, seed: int) -> list:
         total, done = 0.0, False
         while not done:
             ctrl_obs = world.sensor_fn(obs) if world.sensor_fn is not None else obs
-            _set_controller_navigation_feedback(world.controller, env)
             action = world.controller.get_action(ctrl_obs)
             if action.ndim > 1:
                 action = action.squeeze(0)
@@ -249,6 +146,8 @@ def run_episodes(world: EvalWorld, n_episodes: int, seed: int) -> list:
 
 def record_video(world: EvalWorld, out_path: str, seed: int) -> None:
     try:
+        import imageio
+
         env = gym.make(
             "EvalEnv-v0",
             robot_path=world.world_file,
@@ -259,12 +158,8 @@ def record_video(world: EvalWorld, out_path: str, seed: int) -> None:
         obs, _ = env.reset(seed=seed)
         frames = []
         for _ in range(MAX_STEPS):
-            frame = env.render()
-            if isinstance(frame, tuple):
-                frame = frame[0]
-            frames.append(np.ascontiguousarray(np.asarray(frame)))
+            frames.append(env.render())
             ctrl_obs = world.sensor_fn(obs) if world.sensor_fn is not None else obs
-            _set_controller_navigation_feedback(world.controller, env)
             action = world.controller.get_action(ctrl_obs)
             if action.ndim > 1:
                 action = action.squeeze(0)
@@ -272,7 +167,7 @@ def record_video(world: EvalWorld, out_path: str, seed: int) -> None:
             if terminated or truncated:
                 break
         env.close()
-        _write_video(out_path, frames, fps=20)
+        imageio.mimwrite(out_path, frames, fps=20)
         print(f"Video saved: {out_path}")
     except Exception as exc:
         print(f"Video skipped: {exc}")
@@ -328,7 +223,6 @@ if __name__ == "__main__":
 
     if MY_CONTROLLER is not None:
         world.set_controller(MY_CONTROLLER)
-    world.n_body_params = 4
 
     if ROBOT_XML_PATH is not None and GENOTYPE_PATH is not None:
         # Option B: student provides robot XML and genotype separately
