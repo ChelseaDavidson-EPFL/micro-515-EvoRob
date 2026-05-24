@@ -95,9 +95,11 @@ class EvalHillEnv(MujocoEnv, utils.EzPickle):
         cfrc_cost = float(np.sum(self.data.cfrc_ext[1:] ** 2) * self._cfrc_cost_weight)
         terminated = self._is_terminated(xyz_velocity)
 
-        #"Move or Die" Forward Progress
-        forward_bonus = min(max(x_velocity, 0), 1.5) * 15.0
-        still_penalty = -5.0 if x_velocity < 0.1 else 0
+        # Forward bonus: ×6 (slightly higher than flat since climbing is harder).
+        forward_bonus = min(max(x_velocity, 0), 1.5) * 6.0
+
+        # still_penalty removed — see eval_flat.py for rationale.
+
         lateral_penalty = -(abs(y_after - y_before) / self.dt) * 5.0
         y_displacement_penalty = -abs(y_after) * 3.0
         backward_penalty = -abs(min(x_velocity, 0)) * 3.0
@@ -110,23 +112,21 @@ class EvalHillEnv(MujocoEnv, utils.EzPickle):
         z_velocity = float(xyz_velocity[2])
         z_elevation_bonus = max(z_velocity, 0) * 20.0  # Massive reward for moving up
 
-        # Sparse Terminal Reward
-        # If the robot survived the full 500 steps, grant a massive payout for its absolute altitude
-        # (Change 500 to match the n_steps used in final_project_train.py)
-        sparse_z_bonus = 0 if terminated or self._step_count < 500 else float(xyz_after[2]) * 50.0
+        # Sparse Terminal Reward — fires on the last step if the robot survived.
+        # Threshold matches n_steps used in final_project_train.py.
+        sparse_z_bonus = 0 if terminated or self._step_count < 700 else float(xyz_after[2]) * 50.0
 
         reward = (
             healthy_reward
             + forward_bonus
-            + still_penalty
             + lateral_penalty
             + y_displacement_penalty
             + backward_penalty
             + heading_reward
             # + z_elevation_bonus
             # + sparse_z_bonus
-            - ctrl_cost * 0.1
-            - cfrc_cost * 0.1
+            - ctrl_cost * 0.3
+            - cfrc_cost * 0.3
         )
 
         self._prev_x = x_position
@@ -151,7 +151,7 @@ class EvalHillEnv(MujocoEnv, utils.EzPickle):
             return True
         if np.linalg.norm(xyz_velocity) < 1e-2:
             self._stuck_count += 1
-            if self._stuck_count > 10 / self.dt:
+            if self._stuck_count > 5 / self.dt:  # 5 s — halved from 10 s
                 return True
         else:
             self._stuck_count = 0
@@ -159,9 +159,9 @@ class EvalHillEnv(MujocoEnv, utils.EzPickle):
 
     def _torso_upside_down(self) -> bool:
         R = self.data.body(1).xmat.reshape(3, 3)
-        return (
-            float(R[2, 2]) < 0.3   # ~73 degrees
-        )  # Kill episode if tilted > 73 degrees, R[2,2] is the cosine of the robot's overall tilt angle
+        # Tightened from 0.3 (~73°) to 0.5 (~60°) to match flat/ice and prevent
+        # the robot resting on its sphere torso without being terminated.
+        return float(R[2, 2]) < 0.5
 
     def _get_obs(self):
         R = self.data.body(1).xmat.reshape(3, 3)

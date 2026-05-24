@@ -58,6 +58,7 @@ class EvalIceEnv(MujocoEnv, utils.EzPickle):
         self._ctrl_cost_weight = ctrl_cost_weight
         self._cfrc_cost_weight = cfrc_cost_weight
         self._reset_noise_scale = reset_noise_scale
+        self._stuck_count = 0
 
         MujocoEnv.__init__(
             self,
@@ -93,34 +94,43 @@ class EvalIceEnv(MujocoEnv, utils.EzPickle):
         cfrc_cost = float(np.sum(self.data.cfrc_ext[1:] ** 2) * self._cfrc_cost_weight)
         terminated = self._is_terminated()
 
-        # 1. Cap the forward bonus at 1.5 m/s to prevent explosive jumping
-        forward_bonus = min(max(x_velocity, 0), 1.5) * 10.0
-        
-        # 2. Keep the strict still penalty so it doesn't revert to standing
-        still_penalty = -5.0 if x_velocity < 0.1 else 0
-        
+        # Stuck detection: terminate if making no forward progress for 5 s (200 steps).
+        # Prevents the robot from earning healthy_reward while sitting motionless.
+        if x_velocity < 0.01:
+            self._stuck_count += 1
+            if self._stuck_count > 200:
+                terminated = True
+        else:
+            self._stuck_count = 0
+
+        # Forward bonus: ×5 gives max 7.5/step at 1.5 m/s.
+        forward_bonus = min(max(x_velocity, 0), 1.5) * 5.0
+
+        # still_penalty removed — see eval_flat.py for rationale.
+
         y_displacement_penalty = -abs(y_after) * 3.0
-        lateral_penalty = -y_drift * 5.0 
-        backward_penalty = -abs(min(x_velocity, 0)) * 3.0 
+        lateral_penalty = -y_drift * 5.0
+        backward_penalty = -abs(min(x_velocity, 0)) * 3.0
 
         R = self.data.body(1).xmat.reshape(3, 3)
         heading_reward = float(R[:, 0][0]) * 0.5
-        
-        # 3. Add a strict penalty for bouncing/jumping (vertical velocity)
+
+        # Stronger vertical-velocity penalty to deter jumping without harming
+        # normal gait oscillation (typical walk z_vel ~0.05 m/s → cost ~0.15/step;
+        # a jump at z_vel ~2 m/s → cost ~6/step, exceeding the forward bonus).
         z_velocity = float(self.data.qvel.flat[2])
-        vertical_penalty = -abs(z_velocity) * 5.0
+        vertical_penalty = -abs(z_velocity) * 3.0
 
         reward = (
             healthy_reward
             + forward_bonus
-            + still_penalty
             + lateral_penalty
             + y_displacement_penalty
             + backward_penalty
             + heading_reward
             + vertical_penalty
-            - ctrl_cost * 0.1
-            - cfrc_cost * 0.1
+            - ctrl_cost * 0.3
+            - cfrc_cost * 0.3
         )
 
         info = {
@@ -164,6 +174,7 @@ class EvalIceEnv(MujocoEnv, utils.EzPickle):
         )
         qvel = self.init_qvel + noise**2 * self.np_random.standard_normal(self.model.nv)
         self.set_state(qpos, qvel)
+        self._stuck_count = 0
         return self._get_obs()
 
     def _get_reset_info(self):

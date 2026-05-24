@@ -18,6 +18,7 @@ class CMAESAPI(EA):
         sigma: float = 0.3,
         bounds: tuple = (-1, 1),
         output_dir: str = "./results/CMAES",
+        x0: np.ndarray = None,
     ):
         import cma
 
@@ -34,7 +35,7 @@ class CMAESAPI(EA):
         self.x = None
         self.f = None
 
-        initial_mean = np.random.uniform(bounds[0], bounds[1], n_params)
+        initial_mean = x0 if x0 is not None else np.random.uniform(bounds[0], bounds[1], n_params)
         opts = {"popsize": population_size, "bounds": list(bounds)}
         self.es = cma.CMAEvolutionStrategy(x0=initial_mean, sigma0=sigma, inopts=opts)
 

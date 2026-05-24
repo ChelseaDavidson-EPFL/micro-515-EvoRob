@@ -110,11 +110,11 @@ def main():
         n_params=controller.n_params,
         population_size=args.pop_size,
         num_generations=args.generations,
-        sigma=0.1,  # Permet une meilleure exploration de la dynamique physique
-        bounds=(-5, 5),  # Augmenté pour permettre de représenter les gains K > 1.0
+        sigma=0.1,
+        bounds=(-5, 5),
         output_dir=results_dir,
+        x0=seed_genotype,
     )
-    ea.es.x0 = seed_genotype.tolist()
 
     # 4. Loop
     print(f"\nStarting CMA-ES Optimization ({args.generations} gens)...")

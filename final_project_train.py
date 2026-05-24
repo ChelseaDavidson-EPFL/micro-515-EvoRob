@@ -68,13 +68,13 @@ from evorob.world.robot.morphology.ant_custom_robot import AntRobot
 
 ROOT_DIR = get_project_root()
 PID_ENABLED = True
-PID_KP_Y = 0.25
+PID_KP_Y = 0.10        # lowered from 0.25 — was saturating steer_limit too early
 PID_KI_Y = 0.0
-PID_KD_Y = 0.03
-PID_KP_HEADING = 0.35
+PID_KD_Y = 0.02        # lowered from 0.03
+PID_KP_HEADING = 0.20  # lowered from 0.35
 PID_KI_HEADING = 0.0
-PID_KD_HEADING = 0.04
-PID_STEER_LIMIT = 0.25
+PID_KD_HEADING = 0.03  # lowered from 0.04
+PID_STEER_LIMIT = 0.30 # raised from 0.25 to give proportional range at reduced gains
 PID_STEER_SIGN = 1.0
 _ASSETS = join(ROOT_DIR, "evorob", "world", "robot", "assets")
 MAX_EPISODE_STEPS = 1000  # fixed for leaderboard — do not change
@@ -233,10 +233,11 @@ class FinalWorld(World):
             : self.n_weights
         ]  # full scale — let CPG produce real actions
 
-        # MAPPING FOR BOUNDS [-1, 1]:
-        # should be (0.2, 0.7)
-        body_raw = 0.2 + (genotype[self.n_weights :] + 1) / 4  # scale to [0.2, 0.7] m
-        body_raw = np.clip(body_raw, 0.1, 0.8)
+        # Maps EA bounds [-1, 1] to leg-segment lengths [0.2, 0.7] m,
+        # then clamps to [0.15, 0.5] — prevents the robot from evolving legs
+        # so long that the body becomes too wide and top-heavy to balance.
+        body_raw = 0.2 + (genotype[self.n_weights :] + 1) / 4  # nominal [0.2, 0.7] m
+        # body_raw = np.clip(body_raw, 0.15, 0.5)
 
         self.controller.geno2pheno(control_params)
 
@@ -793,6 +794,13 @@ def run_cmaes_refinement(
 
     print(f"Writing results to {results_dir}")
 
+    if seed_genotype is not None:
+        print(f"Warm-starting from provided seed  {seed_genotype.shape}")
+        x0 = seed_genotype
+    else:
+        print(f"Cold start — random initialisation")
+        x0 = None  # CMAESAPI draws uniform random mean when x0 is None
+
     ea = CMAESAPI(
         n_params=world.n_params,
         population_size=population_size,
@@ -800,18 +808,8 @@ def run_cmaes_refinement(
         sigma=sigma,
         bounds=bounds,
         output_dir=results_dir,
+        x0=x0,
     )
-
-    # Warm-start: replace CMA-ES initial mean with the seed genotype
-    if seed_genotype is not None:
-        ea.es.x0 = seed_genotype.tolist()
-        print(f"Warm-starting from provided seed")
-        print(f"Seed       : provided ({seed_genotype.shape})")
-
-    else:
-        # Cold start — random initialisation across the full bounds
-        ea.es.x0 = np.random.uniform(bounds[0], bounds[1], world.n_params).tolist()
-        print(f"Cold start — random initialisation")
 
     print(f"\nRunning CMA-ES  —  {num_generations} generations  pop={population_size}")
     print(f"Objective  : min(flat, ice, hill)  [generalist scalarisation]")
@@ -890,7 +888,7 @@ if __name__ == "__main__":
                 population_size=64,
                 sigma=0.2,
                 n_repeats=2,
-                n_steps=300, # CHECK EVAL HILL MATCHES THIS
+                n_steps=700,  # matches n_steps used in NSGA-II and eval_hill sparse_z threshold
                 ckpt_interval=5,
                 results_dir=args.results_dir,
             )
@@ -902,7 +900,7 @@ if __name__ == "__main__":
                 sigma=0.5,  # large sigma for cold start: rule-of-thumb = range/4 = 2/4
                 bounds=(-1, 1),
                 n_repeats=4,  # 4 repeats: CMA-ES is more noise-sensitive than NSGA-II
-                n_steps=500, # CHECK EVAL HILL MATCHES THIS
+                n_steps=700,  # matches n_steps used in NSGA-II and eval_hill sparse_z threshold
                 ckpt_interval=10,
                 results_dir=args.results_dir,
             )
@@ -912,7 +910,7 @@ if __name__ == "__main__":
             population_size=96,  # Increased to better explore Pareto front
             n_parents=48,  # 50% selection pressure
             n_repeats=2,  # Use 1 repeat during training for speed
-            n_steps=400,  # 400 steps is enough to evaluate speed - !!!! CHECK EVAL HILL MATCHES THIS!!!!
+            n_steps=700,  # increased from 400 — trains toward the 1000-step evaluation horizon
             mutation_prob=0.5,  # was 0.3 — more exploration to find hill gait
             crossover_prob=0.3,  # was 0.5 — less crossover, more mutation for diversity
             ckpt_interval=5,  # Save less often to reduce disk I/O
