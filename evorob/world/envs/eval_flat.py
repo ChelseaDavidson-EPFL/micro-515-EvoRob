@@ -103,13 +103,10 @@ class EvalFlatEnv(MujocoEnv, utils.EzPickle):
         else:
             self._stuck_count = 0
 
-        # Forward bonus: ×7 gives max 10.5/step at 1.5 m/s.
-        forward_bonus = min(max(x_velocity, 0), 1.5) * 7.0
-
-        # still_penalty removed — it fought the stuck_termination (200 steps) and
-        # created a reward valley where slow walking was worse than standing still,
-        # preventing the EA from bootstrapping any locomotion from random init.
-        # The stuck timer alone provides the "move or episode ends" incentive.
+        # AGGRESSIVE REWARD — for comparison run showing unstable/jumping behaviour.
+        # Removing the 1.5 m/s cap and tripling the forward coefficient means
+        # any explosive forward motion (including jumps) is heavily rewarded.
+        forward_bonus = max(x_velocity, 0) * 10.0
 
         y_displacement_penalty = -abs(y_after) * 3.0
         lateral_penalty = -y_drift * 5.0

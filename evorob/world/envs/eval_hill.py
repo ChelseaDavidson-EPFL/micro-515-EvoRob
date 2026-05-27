@@ -96,10 +96,8 @@ class EvalHillEnv(MujocoEnv, utils.EzPickle):
         cfrc_cost = float(np.sum(self.data.cfrc_ext[1:] ** 2) * self._cfrc_cost_weight)
         terminated = self._is_terminated(xyz_velocity)
 
-        # Forward bonus: ×6 (slightly higher than flat since climbing is harder).
-        forward_bonus = min(max(x_velocity, 0), 1.5) * 8.0
-
-        # still_penalty removed — see eval_flat.py for rationale.
+        # AGGRESSIVE REWARD — for comparison run showing unstable/jumping behaviour.
+        forward_bonus = max(x_velocity, 0) * 10.0
 
         lateral_penalty = -(abs(y_after - y_before) / self.dt) * 5.0
         y_displacement_penalty = -abs(y_after) * 3.0
@@ -109,19 +107,21 @@ class EvalHillEnv(MujocoEnv, utils.EzPickle):
         R = self.data.body(1).xmat.reshape(3, 3)
         heading_reward = float(R[:, 0][0]) * 0.5
 
-        # Reward Active Climbing
+        # Uncapped z elevation bonus: massively rewards any upward velocity.
+        # On the hill this causes the robot to attempt to launch itself up
+        # the slope rather than walking steadily — producing fast but erratic climbing.
         z_velocity = float(xyz_velocity[2])
-        z_elevation_bonus = min(max(z_velocity, 0), 1.5) * 8.0  # Massive reward for moving up
-
-        # Sparse Terminal Reward — fires on the last step if the robot survived.
-        # Threshold matches n_steps used in final_project_train.py.
-        sparse_z_bonus = 0 if terminated or self._step_count < 700 else float(xyz_after[2]) * 20.0
+        z_elevation_bonus = max(z_velocity, 0) * 10.0
 
         # Standing height bonus — same rationale as flat/ice.
         # On hill, z_after also grows as the robot climbs, giving a natural
         # extra incentive for ascending.
         height_bonus = max(0.0, z_after - 0.3) * 3.0
 
+
+        sparse_z_bonus = 0 if terminated or self._step_count < 700 else float(xyz_after[2]) * 50.0
+
+        # cfrc_cost near-zero: removes penalty for hard ground impacts.
         reward = (
             healthy_reward
             + forward_bonus
