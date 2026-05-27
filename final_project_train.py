@@ -67,7 +67,7 @@ from evorob.world.base import World
 from evorob.world.robot.morphology.ant_custom_robot import AntRobot
 
 ROOT_DIR = get_project_root()
-PID_ENABLED = True
+PID_ENABLED = False
 PID_KP_Y = 0.10        # lowered from 0.25 — was saturating steer_limit too early
 PID_KI_Y = 0.0
 PID_KD_Y = 0.02        # lowered from 0.03
