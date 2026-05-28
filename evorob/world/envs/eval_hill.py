@@ -97,7 +97,7 @@ class EvalHillEnv(MujocoEnv, utils.EzPickle):
         terminated = self._is_terminated(xyz_velocity)
 
         # AGGRESSIVE REWARD — for comparison run showing unstable/jumping behaviour.
-        forward_bonus = max(x_velocity, 0) * 10.0
+        forward_bonus = max(x_velocity, 0) * 20.0
 
         lateral_penalty = -(abs(y_after - y_before) / self.dt) * 5.0
         y_displacement_penalty = -abs(y_after) * 3.0
@@ -111,7 +111,7 @@ class EvalHillEnv(MujocoEnv, utils.EzPickle):
         # On the hill this causes the robot to attempt to launch itself up
         # the slope rather than walking steadily — producing fast but erratic climbing.
         z_velocity = float(xyz_velocity[2])
-        z_elevation_bonus = max(z_velocity, 0) * 10.0
+        z_elevation_bonus = max(z_velocity, 0) * 15.0
 
         # Standing height bonus — same rationale as flat/ice.
         # On hill, z_after also grows as the robot climbs, giving a natural
@@ -129,7 +129,7 @@ class EvalHillEnv(MujocoEnv, utils.EzPickle):
             + y_displacement_penalty
             + backward_penalty
             + heading_reward
-            + height_bonus
+            # + height_bonus
             + z_elevation_bonus
             + sparse_z_bonus
             - ctrl_cost * 0.3

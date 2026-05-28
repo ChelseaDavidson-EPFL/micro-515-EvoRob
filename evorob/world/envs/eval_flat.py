@@ -106,7 +106,7 @@ class EvalFlatEnv(MujocoEnv, utils.EzPickle):
         # AGGRESSIVE REWARD — for comparison run showing unstable/jumping behaviour.
         # Removing the 1.5 m/s cap and tripling the forward coefficient means
         # any explosive forward motion (including jumps) is heavily rewarded.
-        forward_bonus = max(x_velocity, 0) * 10.0
+        forward_bonus = max(x_velocity, 0) * 15.0
 
         y_displacement_penalty = -abs(y_after) * 3.0
         lateral_penalty = -y_drift * 5.0
@@ -129,7 +129,7 @@ class EvalFlatEnv(MujocoEnv, utils.EzPickle):
             + y_displacement_penalty
             + backward_penalty
             + heading_reward
-            + height_bonus
+            # + height_bonus
             - ctrl_cost * 0.3
             - cfrc_cost * 0.05
         )
